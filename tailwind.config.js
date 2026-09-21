@@ -7,9 +7,19 @@ module.exports = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['Kanit', 'Inter', 'sans-serif'],
+      },
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        ocean: {
+          900: '#0b192c',
+          800: '#1e3e62',
+          700: '#005b94',
+          600: '#008bce',
+          500: '#00b4d8',
+          400: '#90e0ef',
+          100: '#caf0f8',
+        },
       },
     },
   },

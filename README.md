@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# 🐠 AquaSmart Guard - Next.js Aquarium Dashboard & AI Assistant
 
-## Getting Started
+ระบบติดตามสภาวะตู้ปลาอัจฉริยะแบบเรียลไทม์ เชื่อมต่อเซ็นเซอร์จริงผ่าน Blynk IoT และวิเคราะห์สายพันธุ์ปลาด้วย Google Gemini AI
 
-First, run the development server:
+## 🚀 ฟังก์ชันการทำงานหลัก (100% Functional)
 
+1. **เชื่อมต่อ Blynk Cloud API แบบ Real-Time**:
+   - **อุณหภูมิ (Temperature)**: อ่านค่าจาก Virtual Pin `V0`
+   - **ความบริสุทธิ์น้ำ (TDS / PPM)**: อ่านค่าจาก Virtual Pin `V1`
+   - **ระดับความเป็นกรด-ด่าง (pH)**: อ่านค่าจาก Virtual Pin `V2`
+   - มีระบบ Auto-polling ทุก 3 วินาที พร้อมสถานะไฟเขียวกระพริบ (Live Pulse) และปุ่มกด Refresh ทันที
+   - แถบ Diagnostic Terminal ดูค่า Raw Data ของแต่ละ Pin
+
+2. **กราฟแนวโน้มค่าวัดย้อนหลัง (Chart.js)**:
+   - แสดงค่าวัดย้อนหลังแบบ 3 แกน (Multi-axis): pH (แกนซ้าย), TDS (แกนขวา 1), อุณหภูมิ (แกนขวา 2)
+   - อัปเดตกราฟแบบเรียลไทม์ตามเซ็นเซอร์จริง
+
+3. **โหมดจำลองค่า (Simulation & Manual Testing)**:
+   - สลับระหว่างโหมดเซ็นเซอร์จริงและโหมดจำลองได้ทันที
+   - สไลเดอร์ปรับค่า pH, PPM, และ อุณหภูมิ เพื่อทดสอบแถบสถานะ (ปกติ/เตือน/อันตราย) และกราฟ
+
+4. **ผู้ช่วย AI วิเคราะห์การดูแลปลา (Gemini AI)**:
+   - ขับเคลื่อนด้วยโมเดล `gemini-3.5-flash-lite` ตอบสนองรวดเร็วและแม่นยำ
+   - ปุ่มลัดสายพันธุ์ปลายอดนิยม (ปลาเทวดา, ปลาคาร์ฟ, ปลาปอมปาดัวร์, ปลากัด, ปลาหางนกยูง, ปลาหมอสี, ปลามังกร, กุ้งแคระ ฯลฯ) หรือค้นหาสายพันธุ์ใดก็ได้
+   - สามารถระบุหรือเปลี่ยน Gemini API Key ได้ผ่านหน้าเว็บ และบันทึกลงในเครื่อง
+   - มีระบบความรู้สำรอง (Fallback Knowledge Base) ในกรณีที่เครือข่ายขัดข้อง
+
+5. **ระบบเปรียบเทียบสภาวะน้ำลึกซึ้ง (Comparison & Water Quality Score)**:
+   - ปุ่ม **"เทียบกับค่าปัจจุบันในตู้"**: คำนวณคะแนนความเหมาะสมของคุณภาพน้ำ (0 - 100 คะแนน) และแนะนำวิธีแก้ไขอย่างละเอียด (pH Up/Down, การเปลี่ยนถ่ายน้ำ, การใช้ฮีตเตอร์/พัดลม)
+   - ปุ่ม **"ใช้เกณฑ์นี้กับระบบ"**: นำค่าที่เหมาะสมของปลาชนิดนั้นมาเป็นเกณฑ์ตั้งต้นของ Dashboard แบบ Dynamic ทันที
+
+---
+
+## 🛠️ วิธีการเปิดใช้งาน
+
+### 1. เข้าสู่โฟลเดอร์โปรเจกต์
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd D:\aquarium-dashboard
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. รันเซิร์ฟเวอร์
+- **โหมด Development**:
+  ```bash
+  npm run dev
+  ```
+- **โหมด Production (เร็วและเสถียรสูงสุด)**:
+  ```bash
+  npm run build
+  npm run start
+  ```
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+### 3. เปิดเบราว์เซอร์
+เข้าใช้งานผ่าน: [http://localhost:3000](http://localhost:3000)
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+---
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+## ⚙️ การตั้งค่า Environment Variables (`.env.local`)
+สร้างไฟล์ `.env.local` ในรูทของโปรเจกต์:
+```env
+BLYNK_TOKEN=your_blynk_device_token
+GEMINI_API_KEY=your_gemini_api_key
+```
