@@ -7,6 +7,7 @@ export default function AquariumDashboard() {
   // Mode: "live" (Blynk real-time) or "sim" (manual simulator)
   const [mode, setMode] = useState("live");
   const [blynkConnected, setBlynkConnected] = useState(false);
+  const [isEspOnline, setIsEspOnline] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState("กำลังเชื่อมต่อ...");
   const [pollInterval, setPollInterval] = useState(3000); // 3 seconds
@@ -23,6 +24,7 @@ export default function AquariumDashboard() {
     v0: null,
     v1: null,
     v2: null,
+    hardware: null,
     errors: null,
   });
 
@@ -239,10 +241,12 @@ export default function AquariumDashboard() {
           v0: data.raw?.v0,
           v1: data.raw?.v1,
           v2: data.raw?.v2,
+          hardware: data.raw?.hardware,
           errors: data.errors,
         });
 
         setBlynkConnected(true);
+        setIsEspOnline(data.isHardwareConnected === true);
 
         const now = new Date();
         const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now
@@ -257,11 +261,13 @@ export default function AquariumDashboard() {
         }
       } else {
         setBlynkConnected(false);
+        setIsEspOnline(false);
         setLastUpdated("เชื่อมต่อ Blynk ไม่สำเร็จ");
       }
     } catch (err) {
       console.error("Blynk fetch error:", err);
       setBlynkConnected(false);
+      setIsEspOnline(false);
       setLastUpdated("เกิดข้อผิดพลาดในการดึงข้อมูล");
     } finally {
       setIsRefreshing(false);
@@ -600,31 +606,44 @@ export default function AquariumDashboard() {
 
           {/* Header Controls & Status Badges */}
           <div className="flex flex-wrap items-center justify-center gap-2.5">
-            {/* Blynk Sensor Connection Status */}
+            {/* Blynk Sensor Connection & ESP32 Status */}
             {mode === "live" ? (
-              <div
-                className={`glass-card px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs sm:text-sm border transition ${
-                  blynkConnected
-                    ? "border-emerald-500/40 text-emerald-300"
-                    : "border-rose-500/40 text-rose-300"
-                }`}
-                title="Blynk Cloud API Status"
-              >
-                <span className="relative flex h-2.5 w-2.5">
-                  <span
-                    className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                      blynkConnected ? "bg-emerald-400" : "bg-rose-400"
-                    }`}
-                  ></span>
-                  <span
-                    className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                      blynkConnected ? "bg-emerald-500" : "bg-rose-500"
-                    }`}
-                  ></span>
-                </span>
-                <span className="font-medium">
-                  {blynkConnected ? "เชื่อมต่อเซ็นเซอร์ Blynk สด" : "กำลังรอสัญญาณ Blynk"}
-                </span>
+              <div className="flex items-center gap-2">
+                {/* ESP32 Hardware Status Badge */}
+                <div
+                  className={`glass-card px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs sm:text-sm border transition ${
+                    isEspOnline
+                      ? "border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/10"
+                      : "border-rose-500/50 text-rose-300 bg-rose-500/10 animate-pulse"
+                  }`}
+                  title="สถานะการเชื่อมต่อจริงของบอร์ด ESP32 บน Blynk Cloud (isHardwareConnected)"
+                >
+                  <span className="relative flex h-2.5 w-2.5">
+                    {isEspOnline && (
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    )}
+                    <span
+                      className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                        isEspOnline ? "bg-emerald-500" : "bg-rose-500"
+                      }`}
+                    ></span>
+                  </span>
+                  <i className="fa-solid fa-microchip text-xs"></i>
+                  <span className="font-semibold">
+                    ESP32: {isEspOnline ? "Online" : "Offline"}
+                  </span>
+                </div>
+
+                {/* Blynk Cloud Connection Badge */}
+                <div
+                  className={`glass-card px-3 py-1.5 rounded-full hidden sm:flex items-center gap-1.5 text-xs border ${
+                    blynkConnected ? "border-cyan-500/30 text-cyan-300" : "border-rose-500/30 text-rose-300"
+                  }`}
+                  title="สถานะการเชื่อมต่อกับ Blynk Cloud Server"
+                >
+                  <i className="fa-solid fa-cloud text-xs"></i>
+                  <span>{blynkConnected ? "Cloud Sync" : "Cloud Fail"}</span>
+                </div>
               </div>
             ) : (
               <div className="glass-card px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs sm:text-sm border border-amber-500/40 text-amber-300">
@@ -676,7 +695,7 @@ export default function AquariumDashboard() {
             <button
               onClick={() => setShowDiagnostics(!showDiagnostics)}
               className="glass-card hover:bg-slate-700/40 px-2.5 py-1.5 rounded-full text-xs border border-slate-700 text-slate-400 hover:text-cyan-300 transition"
-              title="ดูข้อมูล Blynk Pin V0, V1, V2"
+              title="ดูข้อมูลสถานะ ESP32 และ Blynk Pins"
             >
               <i className="fa-solid fa-terminal"></i>
             </button>
@@ -688,7 +707,7 @@ export default function AquariumDashboard() {
           <div className="glass-card rounded-xl p-4 mb-6 border border-cyan-500/20 text-xs font-mono space-y-2">
             <div className="flex justify-between items-center text-cyan-300 font-bold font-sans">
               <span className="flex items-center gap-1.5">
-                <i className="fa-solid fa-satellite-dish"></i> สถานะการเชื่อมต่อ Blynk Cloud Pins
+                <i className="fa-solid fa-satellite-dish"></i> สถานะฮาร์ดแวร์ ESP32 และ Blynk Cloud Pins
               </span>
               <button
                 onClick={() => setShowDiagnostics(false)}
@@ -697,25 +716,61 @@ export default function AquariumDashboard() {
                 <i className="fa-solid fa-xmark"></i>
               </button>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 pt-1">
+              <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                    <i className="fa-solid fa-microchip"></i> ESP32 Board
+                  </span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                      isEspOnline
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                        : "bg-rose-500/20 text-rose-300 border border-rose-500/40"
+                    }`}
+                  >
+                    {isEspOnline ? "ONLINE" : "OFFLINE"}
+                  </span>
+                </div>
+                <div className="text-slate-300 mt-1">Status: {isEspOnline ? "เชื่อมต่อแล้ว" : "ขาดการเชื่อมต่อ"}</div>
+                <div className="text-[10px] text-slate-400 truncate">.../isHardwareConnected</div>
+              </div>
               <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800">
                 <div className="text-amber-400 font-semibold">Pin V0: อุณหภูมิ (Temp)</div>
                 <div className="text-slate-300 mt-1">Raw: {rawBlynk.v0 ?? "รอข้อมูล..."}</div>
-                <div className="text-[11px] text-slate-400">URL: .../get?token=...&V0</div>
+                <div className="text-[10px] text-slate-400 truncate">.../get?token=...&V0</div>
               </div>
               <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800">
                 <div className="text-blue-400 font-semibold">Pin V1: TDS / PPM</div>
                 <div className="text-slate-300 mt-1">Raw: {rawBlynk.v1 ?? "รอข้อมูล..."}</div>
-                <div className="text-[11px] text-slate-400">URL: .../get?token=...&V1</div>
+                <div className="text-[10px] text-slate-400 truncate">.../get?token=...&V1</div>
               </div>
               <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800">
                 <div className="text-cyan-400 font-semibold">Pin V2: ค่า pH</div>
                 <div className="text-slate-300 mt-1">Raw: {rawBlynk.v2 ?? "รอข้อมูล..."}</div>
-                <div className="text-[11px] text-slate-400">URL: .../get?token=...&V2</div>
+                <div className="text-[10px] text-slate-400 truncate">.../get?token=...&V2</div>
               </div>
             </div>
           </div>
         )}
+
+        {/* Alert Banner if ESP32 is offline */}
+        {!isEspOnline && mode === "live" && (
+          <div className="mb-6 p-4 rounded-2xl glass-card border border-rose-500/50 bg-rose-950/40 flex items-start gap-3.5 text-rose-200 shadow-xl shadow-rose-950/50 animate-pulse">
+            <div className="p-2.5 bg-rose-500/20 text-rose-300 rounded-xl mt-0.5 shrink-0 border border-rose-500/30">
+              <i className="fa-solid fa-triangle-exclamation text-xl text-rose-400"></i>
+            </div>
+            <div>
+              <strong className="font-bold text-rose-300 text-sm sm:text-base block mb-1">
+                แจ้งเตือน: อุปกรณ์ ESP32 ขาดการเชื่อมต่อ (ESP32 Offline)
+              </strong>
+              <p className="text-xs sm:text-sm text-rose-200/90 leading-relaxed">
+                บอร์ด ESP32 ไม่ได้เชื่อมต่อกับระบบ Blynk Cloud ในขณะนี้ (isHardwareConnected = false) ค่าวัดอุณหภูมิ (V0), TDS (V1), และ pH (V2) ที่แสดงอาจเป็นค่าล่าสุดที่ค้างอยู่ กรุณาตรวจเช็คการจ่ายไฟ การเชื่อมต่อ Wi-Fi หรือเฟิร์มแวร์บนตัวบอร์ด ESP32
+              </p>
+            </div>
+          </div>
+        )}
+
 
         {/* Section 1: Current Sensor Parameters (pH, PPM, Temp) */}
         <section className="mb-10">

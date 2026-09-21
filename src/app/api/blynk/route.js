@@ -43,19 +43,48 @@ async function fetchBlynkPin(token, pin) {
   }
 }
 
+async function checkHardwareConnected(token) {
+  const url = `https://blynk.cloud/external/api/isHardwareConnected?token=${token}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache",
+      },
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      return { ok: false, isHardwareConnected: false, status: res.status, raw: null };
+    }
+    const text = (await res.text()).trim().toLowerCase();
+    const isOnline = text === "true";
+    return { ok: true, isHardwareConnected: isOnline, raw: text };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    return { ok: false, isHardwareConnected: false, error: err.message, raw: null };
+  }
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const token = searchParams.get("token") || process.env.BLYNK_TOKEN || DEFAULT_BLYNK_TOKEN;
 
   try {
-    // V0 = Temperature, V1 = TDS, V2 = pH
-    const [v0Res, v1Res, v2Res] = await Promise.all([
+    // V0 = Temperature, V1 = TDS, V2 = pH, plus isHardwareConnected for ESP32 online/offline check
+    const [v0Res, v1Res, v2Res, hwRes] = await Promise.all([
       fetchBlynkPin(token, "V0"),
       fetchBlynkPin(token, "V1"),
       fetchBlynkPin(token, "V2"),
+      checkHardwareConnected(token),
     ]);
 
     const isConnected = v0Res.ok || v1Res.ok || v2Res.ok;
+    const isHardwareOnline = hwRes.isHardwareConnected;
 
     const temp = v0Res.ok ? parsePinValue(v0Res.raw, 25.0) : null;
     const tds = v1Res.ok ? parsePinValue(v1Res.raw, 200) : null;
@@ -65,6 +94,8 @@ export async function GET(request) {
       {
         success: isConnected,
         connected: isConnected,
+        isHardwareConnected: isHardwareOnline,
+        hardwareStatus: isHardwareOnline ? "online" : "offline",
         temp,
         tds,
         ph,
@@ -72,12 +103,14 @@ export async function GET(request) {
           v0: v0Res.raw,
           v1: v1Res.raw,
           v2: v2Res.raw,
+          hardware: hwRes.raw,
         },
         timestamp: new Date().toISOString(),
         errors: {
           v0: v0Res.ok ? null : (v0Res.error || `HTTP ${v0Res.status}`),
           v1: v1Res.ok ? null : (v1Res.error || `HTTP ${v1Res.status}`),
           v2: v2Res.ok ? null : (v2Res.error || `HTTP ${v2Res.status}`),
+          hardware: hwRes.ok ? null : (hwRes.error || `HTTP ${hwRes.status}`),
         },
       },
       {
@@ -91,6 +124,8 @@ export async function GET(request) {
       {
         success: false,
         connected: false,
+        isHardwareConnected: false,
+        hardwareStatus: "error",
         error: err.message || "Failed to fetch Blynk data",
         timestamp: new Date().toISOString(),
       },
