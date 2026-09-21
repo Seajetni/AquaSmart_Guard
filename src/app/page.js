@@ -4,8 +4,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Chart from "chart.js/auto";
 
 export default function AquariumDashboard() {
-  // Mode: "live" (Blynk real-time) or "sim" (manual simulator)
-  const [mode, setMode] = useState("live");
   const [blynkConnected, setBlynkConnected] = useState(false);
   const [isEspOnline, setIsEspOnline] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -26,13 +24,6 @@ export default function AquariumDashboard() {
     v2: null,
     hardware: null,
     errors: null,
-  });
-
-  // Simulator slider state
-  const [simValues, setSimValues] = useState({
-    ph: 7.2,
-    ppm: 185,
-    temp: 27.4,
   });
 
   // AI & Threshold Settings (Standard defaults or customized by AI)
@@ -255,10 +246,8 @@ export default function AquariumDashboard() {
           .padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
         setLastUpdated(`อัปเดตล่าสุด: ${timeStr}`);
 
-        // Update chart if in live mode
-        if (mode === "live") {
-          appendChartPoint(phVal, ppmVal, tempVal, timeStr);
-        }
+        // Update chart
+        appendChartPoint(phVal, ppmVal, tempVal, timeStr);
       } else {
         setBlynkConnected(false);
         setIsEspOnline(false);
@@ -272,12 +261,10 @@ export default function AquariumDashboard() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [mode, appendChartPoint]);
+  }, [appendChartPoint]);
 
-  // 4. Polling effect for Live Mode
+  // 4. Polling effect for Blynk Live Data
   useEffect(() => {
-    if (mode !== "live") return;
-
     // Immediate first fetch
     fetchBlynkData();
 
@@ -288,67 +275,7 @@ export default function AquariumDashboard() {
     }, pollInterval);
 
     return () => clearInterval(interval);
-  }, [mode, pollInterval, isPollingPaused, fetchBlynkData]);
-
-  // 5. Simulation Mode Effect (Periodic subtle jitter for realistic demo)
-  useEffect(() => {
-    if (mode !== "sim") return;
-
-    const simInterval = setInterval(() => {
-      setSimValues((prev) => {
-        const newPh = Math.max(5.0, Math.min(9.5, prev.ph + (Math.random() * 0.2 - 0.1)));
-        const newPpm = Math.max(40, Math.min(1500, prev.ppm + (Math.random() * 10 - 5)));
-        const newTemp = Math.max(18.0, Math.min(36.0, prev.temp + (Math.random() * 0.2 - 0.1)));
-
-        setCurrentValues({
-          ph: Number(newPh.toFixed(1)),
-          ppm: Math.round(newPpm),
-          temp: Number(newTemp.toFixed(1)),
-        });
-
-        const now = new Date();
-        const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now
-          .getMinutes()
-          .toString()
-          .padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
-        setLastUpdated(`จำลองค่าสด: ${timeStr}`);
-
-        appendChartPoint(newPh, newPpm, newTemp, timeStr);
-
-        return { ph: newPh, ppm: newPpm, temp: newTemp };
-      });
-    }, 2500);
-
-    return () => clearInterval(simInterval);
-  }, [mode, appendChartPoint]);
-
-  // Manual Slider Update
-  const handleSliderChange = (param, value) => {
-    const num = parseFloat(value);
-    setSimValues((prev) => ({ ...prev, [param]: num }));
-    setCurrentValues((prev) => ({ ...prev, [param]: num }));
-
-    const now = new Date();
-    const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now
-      .getMinutes()
-      .toString()
-      .padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
-    setLastUpdated(`ปรับค่าด้วยตนเอง: ${timeStr}`);
-
-    appendChartPoint(
-      param === "ph" ? num : currentValues.ph,
-      param === "ppm" ? num : currentValues.ppm,
-      param === "temp" ? num : currentValues.temp,
-      timeStr
-    );
-  };
-
-  // Reset Sliders
-  const handleResetSliders = () => {
-    const defaults = { ph: 7.2, ppm: 185, temp: 27.4 };
-    setSimValues(defaults);
-    setCurrentValues(defaults);
-  };
+  }, [pollInterval, isPollingPaused, fetchBlynkData]);
 
   // Evaluate status badge for each parameter
   const evaluateStatus = (val, min, max, type = "ph") => {
@@ -607,7 +534,6 @@ export default function AquariumDashboard() {
           {/* Header Controls & Status Badges */}
           <div className="flex flex-wrap items-center justify-center gap-2.5">
             {/* Blynk Sensor Connection & ESP32 Status */}
-            {mode === "live" ? (
               <div className="flex items-center gap-2">
                 {/* ESP32 Hardware Status Badge */}
                 <div
@@ -645,51 +571,17 @@ export default function AquariumDashboard() {
                   <span>{blynkConnected ? "Cloud Sync" : "Cloud Fail"}</span>
                 </div>
               </div>
-            ) : (
-              <div className="glass-card px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs sm:text-sm border border-amber-500/40 text-amber-300">
-                <i className="fa-solid fa-flask-vial text-amber-400 text-xs"></i>
-                <span className="font-medium">โหมดจำลองค่า (Simulation)</span>
-              </div>
-            )}
 
-            {/* Mode Toggle Button */}
+            {/* Manual Refresh Button */}
             <button
-              onClick={() => {
-                if (mode === "live") {
-                  setMode("sim");
-                  setSimValues({ ...currentValues });
-                } else {
-                  setMode("live");
-                  fetchBlynkData();
-                }
-              }}
-              className={`glass-card hover:bg-cyan-500/20 px-3.5 py-1.5 rounded-full text-xs sm:text-sm flex items-center gap-2 border transition ${
-                mode === "sim"
-                  ? "bg-cyan-500/30 border-cyan-400 text-cyan-200"
-                  : "border-cyan-500/30 text-slate-300 hover:text-white"
-              }`}
-              title="สลับระหว่างข้อมูลจริงจาก Blynk และโหมดทดลองปรับค่า"
+              onClick={() => fetchBlynkData()}
+              disabled={isRefreshing}
+              className="glass-card hover:bg-cyan-500/20 px-3 py-1.5 rounded-full text-xs flex items-center gap-1.5 border border-cyan-500/30 text-cyan-300 transition disabled:opacity-50"
+              title="ดึงข้อมูลจาก Blynk ทันที"
             >
-              <i
-                className={`fa-solid fa-arrows-rotate text-cyan-400 ${
-                  mode === "sim" || isRefreshing ? "animate-spin" : ""
-                }`}
-              ></i>
-              <span>{mode === "live" ? "จำลองค่าสด" : "กลับไปใช้ Blynk สด"}</span>
+              <i className={`fa-solid fa-rotate ${isRefreshing ? "animate-spin" : ""}`}></i>
+              <span>รีเฟรช</span>
             </button>
-
-            {/* Manual Refresh / Polling Button in Live Mode */}
-            {mode === "live" && (
-              <button
-                onClick={() => fetchBlynkData()}
-                disabled={isRefreshing}
-                className="glass-card hover:bg-cyan-500/20 px-3 py-1.5 rounded-full text-xs flex items-center gap-1.5 border border-cyan-500/30 text-cyan-300 transition disabled:opacity-50"
-                title="ดึงข้อมูลจาก Blynk ทันที"
-              >
-                <i className={`fa-solid fa-rotate ${isRefreshing ? "animate-spin" : ""}`}></i>
-                <span>รีเฟรช</span>
-              </button>
-            )}
 
             {/* Diagnostic Details Toggle */}
             <button
@@ -755,7 +647,7 @@ export default function AquariumDashboard() {
         )}
 
         {/* Alert Banner if ESP32 is offline */}
-        {!isEspOnline && mode === "live" && (
+        {!isEspOnline && (
           <div className="mb-6 p-4 rounded-2xl glass-card border border-rose-500/50 bg-rose-950/40 flex items-start gap-3.5 text-rose-200 shadow-xl shadow-rose-950/50 animate-pulse">
             <div className="p-2.5 bg-rose-500/20 text-rose-300 rounded-xl mt-0.5 shrink-0 border border-rose-500/30">
               <i className="fa-solid fa-triangle-exclamation text-xl text-rose-400"></i>
@@ -785,12 +677,10 @@ export default function AquariumDashboard() {
               </span>
             </div>
             <div className="flex items-center gap-3 text-xs text-cyan-300/70">
-              {mode === "live" && (
-                <span className="flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
-                  โหมดดึงอัตโนมัติ (ทุก 3 วินาที)
-                </span>
-              )}
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+                โหมดดึงอัตโนมัติ (ทุก 3 วินาที)
+              </span>
               <span>{lastUpdated}</span>
             </div>
           </div>
@@ -957,128 +847,30 @@ export default function AquariumDashboard() {
           </div>
         </section>
 
-        {/* Section 2: Real-time Trends Chart & Simulator Controls */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
-          {/* Chart.js Parameter Trend */}
-          <div className="lg:col-span-2 glass-card rounded-2xl p-6">
-            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 mb-4">
-              <h3 className="font-bold text-lg text-cyan-200 flex items-center gap-2">
-                <i className="fa-solid fa-chart-line text-cyan-400"></i>
-                แนวโน้มค่าวัดย้อนหลังแบบเรียลไทม์
-              </h3>
-              <div className="flex items-center gap-3">
-                <span className="inline-flex items-center text-xs text-cyan-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#00b4d8] inline-block mr-1.5"></span>{" "}
-                  pH
-                </span>
-                <span className="inline-flex items-center text-xs text-blue-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#3b82f6] inline-block mr-1.5"></span>{" "}
-                  PPM
-                </span>
-                <span className="inline-flex items-center text-xs text-amber-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#f59e0b] inline-block mr-1.5"></span>{" "}
-                  °C
-                </span>
-              </div>
-            </div>
-            <div className="h-64 sm:h-72 w-full">
-              <canvas ref={chartCanvasRef}></canvas>
-            </div>
-          </div>
-
-          {/* Manual Test Simulator Box */}
-          <div className="glass-card rounded-2xl p-6 flex flex-col justify-between">
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                <h3 className="font-bold text-lg text-cyan-200 flex items-center gap-2">
-                  <i className="fa-solid fa-sliders text-cyan-400"></i>
-                  ปรับจำลองค่าในตู้ปลา
-                </h3>
-                {mode === "sim" && (
-                  <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded font-semibold border border-cyan-500/30">
-                    Active
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-slate-400 mb-6">
-                {mode === "sim"
-                  ? "เลื่อนสไลเดอร์เพื่อทดสอบการตอบสนองของระบบแจ้งเตือนและกราฟทันที"
-                  : "กดเปลี่ยนเป็นโหมดจำลองเพื่อทดลองปรับค่าพารามิเตอร์แบบ Manual"}
-              </p>
-
-              <div className="space-y-4">
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-300">ปรับค่า pH:</span>
-                    <span className="text-cyan-300 font-bold">{Number(simValues.ph).toFixed(1)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="4.5"
-                    max="9.5"
-                    step="0.1"
-                    value={simValues.ph}
-                    onChange={(e) => {
-                      if (mode !== "sim") setMode("sim");
-                      handleSliderChange("ph", e.target.value);
-                    }}
-                    className="w-full accent-cyan-400 cursor-pointer h-2 bg-slate-800 rounded-lg"
-                  />
-                </div>
-
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-300">ปรับค่า PPM (TDS):</span>
-                    <span className="text-blue-300 font-bold">{Math.round(simValues.ppm)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="30"
-                    max="1500"
-                    step="10"
-                    value={simValues.ppm}
-                    onChange={(e) => {
-                      if (mode !== "sim") setMode("sim");
-                      handleSliderChange("ppm", e.target.value);
-                    }}
-                    className="w-full accent-blue-400 cursor-pointer h-2 bg-slate-800 rounded-lg"
-                  />
-                </div>
-
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-300">ปรับอุณหภูมิ (°C):</span>
-                    <span className="text-amber-300 font-bold">
-                      {Number(simValues.temp).toFixed(1)}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="16.0"
-                    max="38.0"
-                    step="0.1"
-                    value={simValues.temp}
-                    onChange={(e) => {
-                      if (mode !== "sim") setMode("sim");
-                      handleSliderChange("temp", e.target.value);
-                    }}
-                    className="w-full accent-amber-400 cursor-pointer h-2 bg-slate-800 rounded-lg"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 pt-4 border-t border-slate-700/50 flex justify-between items-center">
-              <button
-                onClick={handleResetSliders}
-                className="text-xs text-slate-400 hover:text-cyan-300 transition flex items-center gap-1.5"
-              >
-                <i className="fa-solid fa-rotate-left"></i> คืนค่ามาตรฐาน
-              </button>
-              <span className="text-[11px] text-cyan-400/80 bg-cyan-950/80 px-2.5 py-1 rounded border border-cyan-800/50">
-                {mode === "live" ? "Live Feed Mode" : "Manual Mode"}
+        {/* Section 2: Real-time Trends Chart */}
+        <div className="glass-card rounded-2xl p-6 mb-10">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 mb-4">
+            <h3 className="font-bold text-lg text-cyan-200 flex items-center gap-2">
+              <i className="fa-solid fa-chart-line text-cyan-400"></i>
+              แนวโน้มค่าวัดย้อนหลังแบบเรียลไทม์
+            </h3>
+            <div className="flex items-center gap-3">
+              <span className="inline-flex items-center text-xs text-cyan-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#00b4d8] inline-block mr-1.5"></span>{" "}
+                pH
+              </span>
+              <span className="inline-flex items-center text-xs text-blue-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#3b82f6] inline-block mr-1.5"></span>{" "}
+                PPM
+              </span>
+              <span className="inline-flex items-center text-xs text-amber-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#f59e0b] inline-block mr-1.5"></span>{" "}
+                °C
               </span>
             </div>
+          </div>
+          <div className="h-64 sm:h-72 w-full">
+            <canvas ref={chartCanvasRef}></canvas>
           </div>
         </div>
 
