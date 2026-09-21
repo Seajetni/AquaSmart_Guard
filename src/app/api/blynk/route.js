@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { getDatabase } from "@/lib/mongodb";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const DEFAULT_BLYNK_TOKEN = process.env.BLYNK_TOKEN || "";
+const LOG_INTERVAL_MS = 60 * 60 * 1000; // 1 ชั่วโมง (3,600,000 ms)
+let lastLoggedTime = 0;
 
 function parsePinValue(rawText, fallback = 0) {
   if (rawText === null || rawText === undefined) return fallback;
@@ -89,6 +92,31 @@ export async function GET(request) {
     const temp = v0Res.ok ? parsePinValue(v0Res.raw, 25.0) : null;
     const tds = v1Res.ok ? parsePinValue(v1Res.raw, 200) : null;
     const ph = v2Res.ok ? parsePinValue(v2Res.raw, 7.0) : null;
+
+    // Asynchronously log to MongoDB sensor_logs if valid reading (rate limit: once per 1 hour)
+    const nowMs = Date.now();
+    if (isConnected && nowMs - lastLoggedTime > LOG_INTERVAL_MS) {
+      lastLoggedTime = nowMs;
+      getDatabase()
+        .then(async (db) => {
+          if (!db) return;
+          // Verify with latest DB record to ensure at least 1 hour between logs even across server restarts
+          const latestLog = await db.collection("sensor_logs").findOne({}, { sort: { timestamp: -1 } });
+          if (latestLog && nowMs - new Date(latestLog.timestamp).getTime() < LOG_INTERVAL_MS) {
+            lastLoggedTime = new Date(latestLog.timestamp).getTime();
+            return;
+          }
+
+          await db.collection("sensor_logs").insertOne({
+            timestamp: new Date(),
+            ph: ph ?? 7.0,
+            ppm: tds ?? 0,
+            temp: temp ?? 25.0,
+            isHardwareConnected: isHardwareOnline,
+          });
+        })
+        .catch((e) => console.warn("Auto-log to MongoDB failed:", e.message));
+    }
 
     return NextResponse.json(
       {

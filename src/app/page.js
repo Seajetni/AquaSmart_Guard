@@ -76,6 +76,64 @@ export default function AquariumDashboard() {
     if (savedKey) {
       setGeminiApiKey(savedKey);
     }
+
+    // Load saved tank thresholds from localStorage immediately (instant restore)
+    try {
+      const cachedThresholds = localStorage.getItem("tank_thresholds");
+      if (cachedThresholds) {
+        setAiThresholds(JSON.parse(cachedThresholds));
+      }
+    } catch (e) {
+      console.warn("Could not read tank_thresholds from localStorage", e);
+    }
+
+    // Load saved tank thresholds from MongoDB
+    fetch("/api/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data && data.dbConnected) {
+          setAiThresholds(data.data);
+          try {
+            localStorage.setItem("tank_thresholds", JSON.stringify(data.data));
+          } catch {}
+        }
+      })
+      .catch((err) => console.warn("Could not fetch settings from MongoDB:", err));
+
+    // Load historical sensor logs from MongoDB to populate real chart history
+    fetch("/api/logs?limit=16")
+      .then((res) => res.json())
+      .then((resData) => {
+        if (resData.success && Array.isArray(resData.data) && resData.data.length > 0) {
+          const logs = resData.data;
+          const labels = [];
+          const phs = [];
+          const ppms = [];
+          const temps = [];
+
+          logs.forEach((log) => {
+            const d = new Date(log.timestamp);
+            const timeStr = `${d.getHours().toString().padStart(2, "0")}:${d
+              .getMinutes()
+              .toString()
+              .padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
+            labels.push(timeStr);
+            phs.push(Number(log.ph));
+            ppms.push(Math.round(log.ppm));
+            temps.push(Number(log.temp));
+          });
+
+          chartDataRef.current = { labels, ph: phs, ppm: ppms, temp: temps };
+          if (chartInstanceRef.current) {
+            chartInstanceRef.current.data.labels = labels;
+            chartInstanceRef.current.data.datasets[0].data = phs;
+            chartInstanceRef.current.data.datasets[1].data = ppms;
+            chartInstanceRef.current.data.datasets[2].data = temps;
+            chartInstanceRef.current.update();
+          }
+        }
+      })
+      .catch((err) => console.warn("Could not fetch logs from MongoDB:", err));
   }, []);
 
   // 2. Initialize Chart.js
@@ -358,10 +416,10 @@ export default function AquariumDashboard() {
   };
 
   // Apply AI recommended parameters as current dashboard thresholds
-  const handleApplyAiThresholds = () => {
+  const handleApplyAiThresholds = async () => {
     if (!aiResponse?.data) return;
     const d = aiResponse.data;
-    setAiThresholds({
+    const newSettings = {
       speciesName: d.speciesName,
       phMin: d.phMin,
       phMax: d.phMax,
@@ -369,8 +427,34 @@ export default function AquariumDashboard() {
       ppmMax: d.ppmMax,
       tempMin: d.tempMin,
       tempMax: d.tempMax,
-    });
-    alert(`นำเกณฑ์ที่เหมาะสมของ "${d.speciesName}" ไปปรับใช้กับระบบตรวจวัดและแถบเตือนสถานะเรียบร้อยแล้ว!`);
+      tips: d.tips || [],
+    };
+
+    setAiThresholds(newSettings);
+
+    // 1. Persist to localStorage immediately
+    try {
+      localStorage.setItem("tank_thresholds", JSON.stringify(newSettings));
+    } catch (e) {
+      console.warn("Could not save tank_thresholds to localStorage:", e);
+    }
+
+    // 2. Persist to MongoDB
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newSettings),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`นำเกณฑ์ของ "${d.speciesName}" ไปปรับใช้ และบันทึกลงฐานข้อมูลเรียบร้อยแล้ว! (รีโหลดแล้วไม่หาย)`);
+      } else {
+        alert(`นำเกณฑ์ของ "${d.speciesName}" ไปปรับใช้เรียบร้อยแล้ว! (บันทึกไว้ในเครื่องแล้ว)`);
+      }
+    } catch (e) {
+      alert(`นำเกณฑ์ของ "${d.speciesName}" ไปปรับใช้เรียบร้อยแล้ว! (บันทึกไว้ในเครื่องแล้ว)`);
+    }
   };
 
   // Generate comparison report between live tank values and AI recommendations
