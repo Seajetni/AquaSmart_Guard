@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const DEFAULT_BLYNK_TOKEN = process.env.BLYNK_TOKEN || "";
-const LOG_INTERVAL_MS = 60 * 60 * 1000; // 1 ชั่วโมง (3,600,000 ms)
+const LOG_INTERVAL_MS = 2 * 60 * 1000; // 2 นาที (120,000 ms) บันทึกข้อมูลสม่ำเสมอเพื่อดูกราฟรายนาที/ชม.
 let lastLoggedTime = 0;
 
 function parsePinValue(rawText, fallback = 0) {

@@ -3,6 +3,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Chart from "chart.js/auto";
 
+const TIME_RANGES = [
+  { id: "minute", label: "นาที", fullLabel: "รายนาที", icon: "fa-stopwatch", desc: "แสดงผลเรียลไทม์รายนาที" },
+  { id: "hour", label: "ชม.", fullLabel: "รายชั่วโมง", icon: "fa-clock", desc: "แสดงผลย้อนหลังรายชั่วโมง" },
+  { id: "day", label: "วัน", fullLabel: "รายวัน", icon: "fa-calendar-day", desc: "แสดงผลย้อนหลังรายวัน" },
+  { id: "week", label: "อาทิตย์", fullLabel: "รายสัปดาห์", icon: "fa-calendar-week", desc: "แสดงผลย้อนหลังรายสัปดาห์" },
+  { id: "month", label: "เดือน", fullLabel: "รายเดือน", icon: "fa-calendar", desc: "แสดงผลย้อนหลังรายเดือน" },
+];
+
 export default function AquariumDashboard() {
   const [blynkConnected, setBlynkConnected] = useState(false);
   const [isEspOnline, setIsEspOnline] = useState(true);
@@ -10,6 +18,12 @@ export default function AquariumDashboard() {
   const [lastUpdated, setLastUpdated] = useState("กำลังเชื่อมต่อ...");
   const [pollInterval, setPollInterval] = useState(3000); // 3 seconds
   const [isPollingPaused, setIsPollingPaused] = useState(false);
+
+  // Chart timeframe state
+  const [selectedTimeRange, setSelectedTimeRange] = useState("minute");
+  const selectedTimeRangeRef = useRef("minute");
+  const [isChartLoading, setIsChartLoading] = useState(false);
+  const [chartSummary, setChartSummary] = useState(null);
 
   // Raw and current sensor values
   const [currentValues, setCurrentValues] = useState({
@@ -100,40 +114,7 @@ export default function AquariumDashboard() {
       })
       .catch((err) => console.warn("Could not fetch settings from MongoDB:", err));
 
-    // Load historical sensor logs from MongoDB to populate real chart history
-    fetch("/api/logs?limit=16")
-      .then((res) => res.json())
-      .then((resData) => {
-        if (resData.success && Array.isArray(resData.data) && resData.data.length > 0) {
-          const logs = resData.data;
-          const labels = [];
-          const phs = [];
-          const ppms = [];
-          const temps = [];
-
-          logs.forEach((log) => {
-            const d = new Date(log.timestamp);
-            const timeStr = `${d.getHours().toString().padStart(2, "0")}:${d
-              .getMinutes()
-              .toString()
-              .padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
-            labels.push(timeStr);
-            phs.push(Number(log.ph));
-            ppms.push(Math.round(log.ppm));
-            temps.push(Number(log.temp));
-          });
-
-          chartDataRef.current = { labels, ph: phs, ppm: ppms, temp: temps };
-          if (chartInstanceRef.current) {
-            chartInstanceRef.current.data.labels = labels;
-            chartInstanceRef.current.data.datasets[0].data = phs;
-            chartInstanceRef.current.data.datasets[1].data = ppms;
-            chartInstanceRef.current.data.datasets[2].data = temps;
-            chartInstanceRef.current.update();
-          }
-        }
-      })
-      .catch((err) => console.warn("Could not fetch logs from MongoDB:", err));
+    // Note: Historical chart logs are handled by fetchChartData
   }, []);
 
   // 2. Initialize Chart.js
@@ -202,12 +183,34 @@ export default function AquariumDashboard() {
             borderColor: "rgba(0, 180, 216, 0.3)",
             borderWidth: 1,
             padding: 10,
+            callbacks: {
+              label: function (context) {
+                let label = context.dataset.label || "";
+                if (label) label += ": ";
+                if (context.parsed.y !== null) {
+                  if (context.datasetIndex === 0) {
+                    label += context.parsed.y.toFixed(2) + " pH";
+                  } else if (context.datasetIndex === 1) {
+                    label += Math.round(context.parsed.y) + " PPM";
+                  } else if (context.datasetIndex === 2) {
+                    label += context.parsed.y.toFixed(1) + " °C";
+                  }
+                }
+                return label;
+              },
+            },
           },
         },
         scales: {
           x: {
             grid: { color: "rgba(255, 255, 255, 0.05)" },
-            ticks: { color: "#94a3b8", font: { family: "Kanit", size: 11 } },
+            ticks: {
+              color: "#94a3b8",
+              font: { family: "Kanit", size: 11 },
+              maxRotation: 45,
+              autoSkip: true,
+              maxTicksLimit: 12,
+            },
           },
           y: {
             type: "linear",
@@ -247,22 +250,124 @@ export default function AquariumDashboard() {
     };
   }, []);
 
-  // Update chart data points helper
+  // Fetch historical or aggregated sensor logs based on selected time range
+  const fetchChartData = useCallback(async (range) => {
+    setIsChartLoading(true);
+    try {
+      const res = await fetch(`/api/logs?range=${range}`);
+      const resData = await res.json();
+
+      if (resData.success && Array.isArray(resData.data) && resData.data.length > 0) {
+        const points = resData.data;
+        const labels = points.map((p) => p.label);
+        const phs = points.map((p) => Number(p.ph));
+        const ppms = points.map((p) => Math.round(p.ppm));
+        const temps = points.map((p) => Number(p.temp));
+
+        chartDataRef.current = { labels, ph: phs, ppm: ppms, temp: temps };
+
+        const avgPh = (phs.reduce((a, b) => a + b, 0) / phs.length).toFixed(2);
+        const avgPpm = Math.round(ppms.reduce((a, b) => a + b, 0) / ppms.length);
+        const avgTemp = (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1);
+
+        setChartSummary({
+          count: points.length,
+          avgPh,
+          avgPpm,
+          avgTemp,
+        });
+
+        if (chartInstanceRef.current) {
+          const chart = chartInstanceRef.current;
+          chart.data.labels = labels;
+          chart.data.datasets[0].data = phs;
+          chart.data.datasets[1].data = ppms;
+          chart.data.datasets[2].data = temps;
+
+          // Adjust point styling: small radius for live minute view, larger visible dots for aggregated history
+          const pointRadius = range === "minute" ? 3 : 5;
+          const pointHoverRadius = range === "minute" ? 6 : 8;
+          chart.data.datasets.forEach((ds) => {
+            ds.pointRadius = pointRadius;
+            ds.pointHoverRadius = pointHoverRadius;
+          });
+
+          chart.update();
+        }
+      } else {
+        const emptyLabels = range === "minute" ? ["กำลังรับข้อมูล..."] : ["ไม่มีข้อมูลบันทึก"];
+        chartDataRef.current = { labels: emptyLabels, ph: [0], ppm: [0], temp: [0] };
+        setChartSummary(null);
+        if (chartInstanceRef.current) {
+          const chart = chartInstanceRef.current;
+          chart.data.labels = emptyLabels;
+          chart.data.datasets[0].data = [0];
+          chart.data.datasets[1].data = [0];
+          chart.data.datasets[2].data = [0];
+          chart.update();
+        }
+      }
+    } catch (err) {
+      console.warn("Could not fetch chart data for range:", range, err);
+    } finally {
+      setIsChartLoading(false);
+    }
+  }, []);
+
+  const handleTimeRangeChange = (range) => {
+    setSelectedTimeRange(range);
+    selectedTimeRangeRef.current = range;
+    fetchChartData(range);
+  };
+
+  // Trigger chart fetch whenever selectedTimeRange changes
+  useEffect(() => {
+    fetchChartData(selectedTimeRange);
+  }, [selectedTimeRange, fetchChartData]);
+
+  // Update chart data points helper (streaming real-time in "minute" mode)
   const appendChartPoint = useCallback((ph, ppm, temp, timeStr) => {
     if (!chartInstanceRef.current) return;
+    if (selectedTimeRangeRef.current !== "minute") return; // Keep historical view undisturbed
     const chart = chartInstanceRef.current;
 
-    chart.data.labels.push(timeStr);
-    chart.data.datasets[0].data.push(Number(ph.toFixed(1)));
-    chart.data.datasets[1].data.push(Math.round(ppm));
-    chart.data.datasets[2].data.push(Number(temp.toFixed(1)));
+    // Reset default placeholders if any
+    if (
+      chart.data.labels.length > 0 &&
+      (chart.data.labels[0] === "เริ่มต้น" ||
+        chart.data.labels[0] === "ไม่มีข้อมูลบันทึก" ||
+        chart.data.labels[0] === "กำลังรับข้อมูล...")
+    ) {
+      chart.data.labels = [];
+      chart.data.datasets[0].data = [];
+      chart.data.datasets[1].data = [];
+      chart.data.datasets[2].data = [];
+    }
 
-    // Keep up to 16 historical readings for smooth graph
-    if (chart.data.labels.length > 16) {
+    chart.data.labels.push(timeStr);
+    chart.data.datasets[0].data.push(Number(Number(ph).toFixed(2)));
+    chart.data.datasets[1].data.push(Math.round(ppm));
+    chart.data.datasets[2].data.push(Number(Number(temp).toFixed(1)));
+
+    // Keep up to 30 historical readings for smooth graph
+    if (chart.data.labels.length > 30) {
       chart.data.labels.shift();
       chart.data.datasets[0].data.shift();
       chart.data.datasets[1].data.shift();
       chart.data.datasets[2].data.shift();
+    }
+
+    // Update real-time summary stats
+    const phs = chart.data.datasets[0].data;
+    const ppms = chart.data.datasets[1].data;
+    const temps = chart.data.datasets[2].data;
+    if (phs.length > 0) {
+      setChartSummary({
+        count: phs.length,
+        avgPh: (phs.reduce((a, b) => a + b, 0) / phs.length).toFixed(2),
+        avgPpm: Math.round(ppms.reduce((a, b) => a + b, 0) / ppms.length),
+        avgTemp: (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1),
+      });
     }
 
     chart.update("none");
@@ -931,31 +1036,126 @@ export default function AquariumDashboard() {
           </div>
         </section>
 
-        {/* Section 2: Real-time Trends Chart */}
+        {/* Section 2: Real-time & Historical Trends Chart */}
         <div className="glass-card rounded-2xl p-6 mb-10">
-          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 mb-4">
-            <h3 className="font-bold text-lg text-cyan-200 flex items-center gap-2">
-              <i className="fa-solid fa-chart-line text-cyan-400"></i>
-              แนวโน้มค่าวัดย้อนหลังแบบเรียลไทม์
-            </h3>
-            <div className="flex items-center gap-3">
-              <span className="inline-flex items-center text-xs text-cyan-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#00b4d8] inline-block mr-1.5"></span>{" "}
-                pH
-              </span>
-              <span className="inline-flex items-center text-xs text-blue-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#3b82f6] inline-block mr-1.5"></span>{" "}
-                PPM
-              </span>
-              <span className="inline-flex items-center text-xs text-amber-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#f59e0b] inline-block mr-1.5"></span>{" "}
-                °C
-              </span>
+          <div className="flex flex-col lg:flex-row justify-between lg:items-center gap-4 mb-5">
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h3 className="font-bold text-lg text-cyan-200 flex items-center gap-2">
+                  <i className="fa-solid fa-chart-line text-cyan-400"></i>
+                  แนวโน้มค่าวัดคุณภาพน้ำ
+                </h3>
+                {selectedTimeRange === "minute" ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm shadow-emerald-500/10">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                    สด (Real-time)
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-cyan-900/40 text-cyan-300 border border-cyan-500/30">
+                    <i className="fa-solid fa-clock-rotate-left text-[10px]"></i>
+                    ประวัติ ({TIME_RANGES.find((r) => r.id === selectedTimeRange)?.fullLabel})
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                {selectedTimeRange === "minute" && "แสดงผลสดแบบเรียลไทม์ อัปเดตอัตโนมัติตามสัญญาณ Blynk ทุก 3 วินาที"}
+                {selectedTimeRange === "hour" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายชั่วโมง (ชั่วโมงที่บันทึกข้อมูล)"}
+                {selectedTimeRange === "day" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายวัน (วันละ 1 จุดสรุป)"}
+                {selectedTimeRange === "week" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายสัปดาห์ (อาทิตย์)"}
+                {selectedTimeRange === "month" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายเดือน"}
+              </p>
+            </div>
+
+            {/* Timeframe Selector & Legend Controls */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Range Selector Buttons (นาที, ชม., วัน, อาทิตย์, เดือน) */}
+              <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-700/80 shadow-inner">
+                {TIME_RANGES.map((r) => {
+                  const isActive = selectedTimeRange === r.id;
+                  return (
+                    <button
+                      key={r.id}
+                      onClick={() => handleTimeRangeChange(r.id)}
+                      disabled={isChartLoading && isActive}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
+                        isActive
+                          ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-semibold shadow-md shadow-cyan-500/30"
+                          : "text-slate-400 hover:text-cyan-200 hover:bg-slate-800/70"
+                      }`}
+                      title={r.desc}
+                    >
+                      <i className={`fa-solid ${r.icon} text-[11px]`}></i>
+                      <span>{r.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Refresh Chart Button */}
+              <button
+                onClick={() => fetchChartData(selectedTimeRange)}
+                disabled={isChartLoading}
+                className="glass-card hover:bg-cyan-500/20 px-2.5 py-1.5 rounded-xl text-xs flex items-center gap-1 text-slate-400 hover:text-cyan-300 border border-slate-700/70 transition disabled:opacity-50"
+                title="รีเฟรชข้อมูลกราฟ"
+              >
+                <i
+                  className={`fa-solid fa-arrows-rotate text-xs ${
+                    isChartLoading ? "animate-spin text-cyan-400" : ""
+                  }`}
+                ></i>
+              </button>
+
+              {/* Metric Legends */}
+              <div className="flex items-center gap-3 pl-1 border-l border-slate-800 hidden sm:flex">
+                <span className="inline-flex items-center text-xs text-cyan-300">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#00b4d8] inline-block mr-1.5"></span>{" "}
+                  pH
+                </span>
+                <span className="inline-flex items-center text-xs text-blue-300">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#3b82f6] inline-block mr-1.5"></span>{" "}
+                  PPM
+                </span>
+                <span className="inline-flex items-center text-xs text-amber-300">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#f59e0b] inline-block mr-1.5"></span>{" "}
+                  °C
+                </span>
+              </div>
             </div>
           </div>
-          <div className="h-64 sm:h-72 w-full">
+
+          {/* Chart Canvas Area */}
+          <div className="h-64 sm:h-72 w-full relative">
+            {isChartLoading && (
+              <div className="absolute inset-0 z-10 bg-slate-950/60 backdrop-blur-[2px] rounded-xl flex items-center justify-center gap-2 text-cyan-300 text-xs">
+                <i className="fa-solid fa-circle-notch animate-spin text-base"></i>
+                <span>กำลังโหลดข้อมูลกราฟ...</span>
+              </div>
+            )}
             <canvas ref={chartCanvasRef}></canvas>
           </div>
+
+          {/* Summary Stats Footer */}
+          {chartSummary && (
+            <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+              <div className="flex items-center gap-2">
+                <i className="fa-solid fa-chart-simple text-cyan-400"></i>
+                <span>
+                  สรุปช่วง{TIME_RANGES.find((r) => r.id === selectedTimeRange)?.fullLabel} ({chartSummary.count} จุดบันทึก):
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-4">
+                <span className="text-slate-300">
+                  pH เฉลี่ย: <strong className="text-cyan-300 font-bold">{chartSummary.avgPh}</strong>
+                </span>
+                <span className="text-slate-300">
+                  TDS เฉลี่ย: <strong className="text-blue-300 font-bold">{chartSummary.avgPpm}</strong> PPM
+                </span>
+                <span className="text-slate-300">
+                  อุณหภูมิเฉลี่ย: <strong className="text-amber-300 font-bold">{chartSummary.avgTemp}</strong> °C
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Section 3: AI Assistant Powered by Gemini */}
