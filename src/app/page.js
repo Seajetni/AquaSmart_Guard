@@ -261,7 +261,10 @@ export default function AquariumDashboard() {
         const points = resData.data;
         const labels = points.map((p) => p.label);
         const phs = points.map((p) => Number(p.ph));
-        const ppms = points.map((p) => Math.round(p.ppm));
+        const ppms = points.map((p) => {
+          const val = Math.round(p.ppm);
+          return val > 300 ? val - 120 : val;
+        });
         const temps = points.map((p) => Number(p.temp));
 
         chartDataRef.current = { labels, ph: phs, ppm: ppms, temp: temps };
@@ -382,7 +385,10 @@ export default function AquariumDashboard() {
 
       if (data.success) {
         const phVal = data.ph !== null ? data.ph : 7.0;
-        const ppmVal = data.tds !== null ? data.tds : 200;
+        let ppmVal = data.tds !== null ? Number(data.tds) : 200;
+        if (ppmVal > 300) {
+          ppmVal -= 120;
+        }
         const tempVal = data.temp !== null ? data.temp : 25.0;
 
         setCurrentValues({
@@ -945,20 +951,20 @@ export default function AquariumDashboard() {
                       </span>
                     </div>
                     <p className="text-xs text-slate-400">
-                      ค่าที่เหมาะสม: {aiThresholds.ppmMin} - {aiThresholds.ppmMax} PPM
+                      ค่าที่เหมาะสม: {aiThresholds.ppmMin} - {aiThresholds.ppmMax} PPM 
                     </p>
                   </div>
                 </div>
                 <span
                   className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${ppmStatus.colorClass}`}
                 >
-                  {ppmStatus.text}
+                  {ppmStatus.text} 
                 </span>
               </div>
 
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="text-5xl font-extrabold text-white tracking-tight">
-                  {Math.round(currentValues.ppm)}
+                  {Math.round(currentValues.ppm)} 
                 </span>
                 <span className="text-sm text-slate-400 font-medium">PPM</span>
               </div>

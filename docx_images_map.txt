@@ -1,0 +1,8 @@
+Paragraph 30 has image: rId7 -> media/image8.jpg | Text before: ''
+Paragraph 33 has image: rId8 -> media/image6.png | Text before: '          '
+Paragraph 37 has image: rId9 -> media/image5.png | Text before: ''
+Paragraph 40 has image: rId10 -> media/image4.png | Text before: ''
+Paragraph 49 has image: rId11 -> media/image1.jpg | Text before: ''
+Paragraph 52 has image: rId12 -> media/image2.jpg | Text before: ''
+Paragraph 56 has image: rId13 -> media/image3.png | Text before: ''
+Paragraph 71 has image: rId14 -> media/image7.png | Text before: ''
