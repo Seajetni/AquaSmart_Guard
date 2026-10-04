@@ -3,6 +3,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Chart from "chart.js/auto";
 
+import { SensorDataManager } from "../lib/managers/SensorDataManager";
+import { ChartDataManager } from "../lib/managers/ChartDataManager";
+import { ThresholdService } from "../lib/services/ThresholdService";
+
 const TIME_RANGES = [
   { id: "minute", label: "นาที", fullLabel: "รายนาที", icon: "fa-stopwatch", desc: "แสดงผลเรียลไทม์รายนาที" },
   { id: "hour", label: "ชม.", fullLabel: "รายชั่วโมง", icon: "fa-clock", desc: "แสดงผลย้อนหลังรายชั่วโมง" },
@@ -12,46 +16,26 @@ const TIME_RANGES = [
 ];
 
 export default function AquariumDashboard() {
+  const sensorDataManagerRef = useRef(new SensorDataManager());
+  const chartDataManagerRef = useRef(new ChartDataManager());
+  const thresholdServiceRef = useRef(new ThresholdService());
+
   const [blynkConnected, setBlynkConnected] = useState(false);
   const [isEspOnline, setIsEspOnline] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState("กำลังเชื่อมต่อ...");
-  const [pollInterval, setPollInterval] = useState(3000); // 3 seconds
+  const [pollInterval, setPollInterval] = useState(3000);
   const [isPollingPaused, setIsPollingPaused] = useState(false);
 
-  // Chart timeframe state
   const [selectedTimeRange, setSelectedTimeRange] = useState("minute");
   const selectedTimeRangeRef = useRef("minute");
   const [isChartLoading, setIsChartLoading] = useState(false);
   const [chartSummary, setChartSummary] = useState(null);
 
-  // Raw and current sensor values
-  const [currentValues, setCurrentValues] = useState({
-    ph: 7.2,
-    ppm: 185,
-    temp: 27.4,
-  });
+  const [currentValues, setCurrentValues] = useState(sensorDataManagerRef.current.getValues());
+  const [rawBlynk, setRawBlynk] = useState(sensorDataManagerRef.current.getRawData());
+  const [aiThresholds, setAiThresholds] = useState(thresholdServiceRef.current.getThresholds());
 
-  const [rawBlynk, setRawBlynk] = useState({
-    v0: null,
-    v1: null,
-    v2: null,
-    hardware: null,
-    errors: null,
-  });
-
-  // AI & Threshold Settings (Standard defaults or customized by AI)
-  const [aiThresholds, setAiThresholds] = useState({
-    speciesName: "มาตรฐานน้ำจืดทั่วไป (General Freshwater)",
-    phMin: 6.5,
-    phMax: 7.5,
-    ppmMin: 150,
-    ppmMax: 300,
-    tempMin: 26.0,
-    tempMax: 28.5,
-  });
-
-  // AI State
   const [fishInput, setFishInput] = useState("");
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [isAiLoading, setIsAiLoading] = useState(false);
@@ -60,22 +44,12 @@ export default function AquariumDashboard() {
   const [compareModalOpen, setCompareModalOpen] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
-  // Background bubbles
   const [bubbles, setBubbles] = useState([]);
 
-  // Chart ref
   const chartCanvasRef = useRef(null);
   const chartInstanceRef = useRef(null);
-  const chartDataRef = useRef({
-    labels: ["เริ่มต้น", "ก่อนหน้า", "ก่อนหน้า", "ก่อนหน้า", "ปัจจุบัน"],
-    ph: [7.2, 7.2, 7.2, 7.2, 7.2],
-    ppm: [185, 185, 185, 185, 185],
-    temp: [27.4, 27.4, 27.4, 27.4, 27.4],
-  });
 
-  // 1. Initialize Bubbles & Load Saved API Key
   useEffect(() => {
-    // Generate floating background bubbles
     const bubbleList = Array.from({ length: 18 }, (_, i) => ({
       id: i,
       size: Math.random() * 38 + 12,
@@ -85,39 +59,17 @@ export default function AquariumDashboard() {
     }));
     setBubbles(bubbleList);
 
-    // Load saved API key from localStorage if set by user
     const savedKey = localStorage.getItem("gemini_api_key");
-    if (savedKey) {
-      setGeminiApiKey(savedKey);
-    }
+    if (savedKey) setGeminiApiKey(savedKey);
 
-    // Load saved tank thresholds from localStorage immediately (instant restore)
-    try {
-      const cachedThresholds = localStorage.getItem("tank_thresholds");
-      if (cachedThresholds) {
-        setAiThresholds(JSON.parse(cachedThresholds));
-      }
-    } catch (e) {
-      console.warn("Could not read tank_thresholds from localStorage", e);
-    }
+    const loadThresholds = async () => {
+      const thresholds = await thresholdServiceRef.current.loadThresholds();
+      setAiThresholds(thresholds);
+    };
 
-    // Load saved tank thresholds from MongoDB
-    fetch("/api/settings")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.data && data.dbConnected) {
-          setAiThresholds(data.data);
-          try {
-            localStorage.setItem("tank_thresholds", JSON.stringify(data.data));
-          } catch {}
-        }
-      })
-      .catch((err) => console.warn("Could not fetch settings from MongoDB:", err));
-
-    // Note: Historical chart logs are handled by fetchChartData
+    loadThresholds();
   }, []);
 
-  // 2. Initialize Chart.js
   useEffect(() => {
     if (!chartCanvasRef.current) return;
 
@@ -126,14 +78,14 @@ export default function AquariumDashboard() {
     }
 
     const ctx = chartCanvasRef.current.getContext("2d");
-    chartInstanceRef.current = new Chart(ctx, {
+    const chart = new Chart(ctx, {
       type: "line",
       data: {
-        labels: chartDataRef.current.labels,
+        labels: chartDataManagerRef.current.getChartData().labels,
         datasets: [
           {
             label: "pH (ความเป็นกรด-ด่าง)",
-            data: chartDataRef.current.ph,
+            data: chartDataManagerRef.current.getChartData().ph,
             borderColor: "#00b4d8",
             backgroundColor: "rgba(0, 180, 216, 0.12)",
             borderWidth: 2.5,
@@ -145,7 +97,7 @@ export default function AquariumDashboard() {
           },
           {
             label: "TDS / PPM (ความบริสุทธิ์)",
-            data: chartDataRef.current.ppm,
+            data: chartDataManagerRef.current.getChartData().ppm,
             borderColor: "#3b82f6",
             backgroundColor: "transparent",
             borderWidth: 2,
@@ -155,7 +107,7 @@ export default function AquariumDashboard() {
           },
           {
             label: "อุณหภูมิ (°C)",
-            data: chartDataRef.current.temp,
+            data: chartDataManagerRef.current.getChartData().temp,
             borderColor: "#f59e0b",
             backgroundColor: "transparent",
             borderWidth: 2,
@@ -168,14 +120,9 @@ export default function AquariumDashboard() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        interaction: {
-          mode: "index",
-          intersect: false,
-        },
+        interaction: { mode: "index", intersect: false },
         plugins: {
-          legend: {
-            display: false,
-          },
+          legend: { display: false },
           tooltip: {
             backgroundColor: "rgba(11, 25, 44, 0.95)",
             titleColor: "#90e0ef",
@@ -212,36 +159,15 @@ export default function AquariumDashboard() {
               maxTicksLimit: 12,
             },
           },
-          y: {
-            type: "linear",
-            position: "left",
-            min: 0,
-            max: 14,
-            grid: { color: "rgba(255, 255, 255, 0.05)" },
-            ticks: { color: "#00b4d8", font: { family: "Kanit", size: 11 } },
-            title: { display: true, text: "pH", color: "#00b4d8" },
-          },
-          y1: {
-            type: "linear",
-            position: "right",
-            min: 0,
-            max: 1600,
-            grid: { drawOnChartArea: false },
-            ticks: { color: "#3b82f6", font: { family: "Kanit", size: 11 } },
-            title: { display: true, text: "PPM", color: "#3b82f6" },
-          },
-          y2: {
-            type: "linear",
-            position: "right",
-            min: 10,
-            max: 45,
-            grid: { drawOnChartArea: false },
-            ticks: { color: "#f59e0b", font: { family: "Kanit", size: 11 } },
-            title: { display: true, text: "°C", color: "#f59e0b" },
-          },
+          y: { type: "linear", position: "left", min: 0, max: 14, grid: { color: "rgba(255, 255, 255, 0.05)" }, ticks: { color: "#00b4d8", font: { family: "Kanit", size: 11 } }, title: { display: true, text: "pH", color: "#00b4d8" } },
+          y1: { type: "linear", position: "right", min: 0, max: 1600, grid: { drawOnChartArea: false }, ticks: { color: "#3b82f6", font: { family: "Kanit", size: 11 } }, title: { display: true, text: "PPM", color: "#3b82f6" } },
+          y2: { type: "linear", position: "right", min: 10, max: 45, grid: { drawOnChartArea: false }, ticks: { color: "#f59e0b", font: { family: "Kanit", size: 11 } }, title: { display: true, text: "°C", color: "#f59e0b" } },
         },
       },
     });
+
+    chartInstanceRef.current = chart;
+    chartDataManagerRef.current.setChartInstance(chart);
 
     return () => {
       if (chartInstanceRef.current) {
@@ -250,66 +176,11 @@ export default function AquariumDashboard() {
     };
   }, []);
 
-  // Fetch historical or aggregated sensor logs based on selected time range
   const fetchChartData = useCallback(async (range) => {
     setIsChartLoading(true);
     try {
-      const res = await fetch(`/api/logs?range=${range}`);
-      const resData = await res.json();
-
-      if (resData.success && Array.isArray(resData.data) && resData.data.length > 0) {
-        const points = resData.data;
-        const labels = points.map((p) => p.label);
-        const phs = points.map((p) => Number(p.ph));
-        const ppms = points.map((p) => {
-          const val = Math.round(p.ppm);
-          return val > 300 ? val - 120 : val;
-        });
-        const temps = points.map((p) => Number(p.temp));
-
-        chartDataRef.current = { labels, ph: phs, ppm: ppms, temp: temps };
-
-        const avgPh = (phs.reduce((a, b) => a + b, 0) / phs.length).toFixed(2);
-        const avgPpm = Math.round(ppms.reduce((a, b) => a + b, 0) / ppms.length);
-        const avgTemp = (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1);
-
-        setChartSummary({
-          count: points.length,
-          avgPh,
-          avgPpm,
-          avgTemp,
-        });
-
-        if (chartInstanceRef.current) {
-          const chart = chartInstanceRef.current;
-          chart.data.labels = labels;
-          chart.data.datasets[0].data = phs;
-          chart.data.datasets[1].data = ppms;
-          chart.data.datasets[2].data = temps;
-
-          // Adjust point styling: small radius for live minute view, larger visible dots for aggregated history
-          const pointRadius = range === "minute" ? 3 : 5;
-          const pointHoverRadius = range === "minute" ? 6 : 8;
-          chart.data.datasets.forEach((ds) => {
-            ds.pointRadius = pointRadius;
-            ds.pointHoverRadius = pointHoverRadius;
-          });
-
-          chart.update();
-        }
-      } else {
-        const emptyLabels = range === "minute" ? ["กำลังรับข้อมูล..."] : ["ไม่มีข้อมูลบันทึก"];
-        chartDataRef.current = { labels: emptyLabels, ph: [0], ppm: [0], temp: [0] };
-        setChartSummary(null);
-        if (chartInstanceRef.current) {
-          const chart = chartInstanceRef.current;
-          chart.data.labels = emptyLabels;
-          chart.data.datasets[0].data = [0];
-          chart.data.datasets[1].data = [0];
-          chart.data.datasets[2].data = [0];
-          chart.update();
-        }
-      }
+      const result = await chartDataManagerRef.current.fetchHistoricalData(range);
+      setChartSummary(result.summary ?? null);
     } catch (err) {
       console.warn("Could not fetch chart data for range:", range, err);
     } finally {
@@ -323,104 +194,43 @@ export default function AquariumDashboard() {
     fetchChartData(range);
   };
 
-  // Trigger chart fetch whenever selectedTimeRange changes
   useEffect(() => {
     fetchChartData(selectedTimeRange);
   }, [selectedTimeRange, fetchChartData]);
 
-  // Update chart data points helper (streaming real-time in "minute" mode)
   const appendChartPoint = useCallback((ph, ppm, temp, timeStr) => {
-    if (!chartInstanceRef.current) return;
-    if (selectedTimeRangeRef.current !== "minute") return; // Keep historical view undisturbed
-    const chart = chartInstanceRef.current;
-
-    // Reset default placeholders if any
-    if (
-      chart.data.labels.length > 0 &&
-      (chart.data.labels[0] === "เริ่มต้น" ||
-        chart.data.labels[0] === "ไม่มีข้อมูลบันทึก" ||
-        chart.data.labels[0] === "กำลังรับข้อมูล...")
-    ) {
-      chart.data.labels = [];
-      chart.data.datasets[0].data = [];
-      chart.data.datasets[1].data = [];
-      chart.data.datasets[2].data = [];
-    }
-
-    chart.data.labels.push(timeStr);
-    chart.data.datasets[0].data.push(Number(Number(ph).toFixed(2)));
-    chart.data.datasets[1].data.push(Math.round(ppm));
-    chart.data.datasets[2].data.push(Number(Number(temp).toFixed(1)));
-
-    // Keep up to 30 historical readings for smooth graph
-    if (chart.data.labels.length > 30) {
-      chart.data.labels.shift();
-      chart.data.datasets[0].data.shift();
-      chart.data.datasets[1].data.shift();
-      chart.data.datasets[2].data.shift();
-    }
-
-    // Update real-time summary stats
-    const phs = chart.data.datasets[0].data;
-    const ppms = chart.data.datasets[1].data;
-    const temps = chart.data.datasets[2].data;
-    if (phs.length > 0) {
-      setChartSummary({
-        count: phs.length,
-        avgPh: (phs.reduce((a, b) => a + b, 0) / phs.length).toFixed(2),
-        avgPpm: Math.round(ppms.reduce((a, b) => a + b, 0) / ppms.length),
-        avgTemp: (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1),
-      });
-    }
-
-    chart.update("none");
+    chartDataManagerRef.current.appendRealTimePoint(
+      ph,
+      ppm,
+      temp,
+      timeStr,
+      selectedTimeRangeRef.current === "minute"
+    );
+    const summary = chartDataManagerRef.current.getSummary();
+    if (summary) setChartSummary(summary);
   }, []);
 
-  // 3. Fetch Real Blynk Sensor Data
   const fetchBlynkData = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const res = await fetch("/api/blynk", { cache: "no-store" });
-      const data = await res.json();
+      const result = await sensorDataManagerRef.current.fetchSensorData();
 
-      if (data.success) {
-        const phVal = data.ph !== null ? data.ph : 7.0;
-        let ppmVal = data.tds !== null ? Number(data.tds) : 200;
-        if (ppmVal > 300) {
-          ppmVal -= 120;
-        }
-        const tempVal = data.temp !== null ? data.temp : 25.0;
-
-        setCurrentValues({
-          ph: phVal,
-          ppm: ppmVal,
-          temp: tempVal,
-        });
-
-        setRawBlynk({
-          v0: data.raw?.v0,
-          v1: data.raw?.v1,
-          v2: data.raw?.v2,
-          hardware: data.raw?.hardware,
-          errors: data.errors,
-        });
-
-        setBlynkConnected(true);
-        setIsEspOnline(data.isHardwareConnected === true);
-
-        const now = new Date();
-        const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now
-          .getMinutes()
-          .toString()
-          .padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
-        setLastUpdated(`อัปเดตล่าสุด: ${timeStr}`);
-
-        // Update chart
-        appendChartPoint(phVal, ppmVal, tempVal, timeStr);
+      if (result.success) {
+        setCurrentValues(result.values);
+        setRawBlynk(result.raw);
+        setBlynkConnected(result.status.blynkConnected);
+        setIsEspOnline(result.status.isEspOnline);
+        setLastUpdated(result.status.lastUpdated);
+        appendChartPoint(
+          result.values.ph,
+          result.values.ppm,
+          result.values.temp,
+          result.timeString.replace("อัปเดตล่าสุด: ", "")
+        );
       } else {
         setBlynkConnected(false);
         setIsEspOnline(false);
-        setLastUpdated("เชื่อมต่อ Blynk ไม่สำเร็จ");
+        setLastUpdated(result.status.lastUpdated || "เชื่อมต่อ Blynk ไม่สำเร็จ");
       }
     } catch (err) {
       console.error("Blynk fetch error:", err);
@@ -432,9 +242,7 @@ export default function AquariumDashboard() {
     }
   }, [appendChartPoint]);
 
-  // 4. Polling effect for Blynk Live Data
   useEffect(() => {
-    // Immediate first fetch
     fetchBlynkData();
 
     if (isPollingPaused) return;
@@ -446,36 +254,9 @@ export default function AquariumDashboard() {
     return () => clearInterval(interval);
   }, [pollInterval, isPollingPaused, fetchBlynkData]);
 
-  // Evaluate status badge for each parameter
-  const evaluateStatus = (val, min, max, type = "ph") => {
-    if (val >= min && val <= max) {
-      return {
-        text: "ปกติ / Safe",
-        colorClass: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
-        indicatorColor: "bg-emerald-400",
-        status: "safe",
-      };
-    }
+  const evaluateStatus = (val, min, max, type = "ph") =>
+    thresholdServiceRef.current.evaluateStatus(val, min, max, type);
 
-    const tolerance = type === "ph" ? 0.4 : type === "ppm" ? 50 : 1.0;
-    if (val >= min - tolerance && val <= max + tolerance) {
-      return {
-        text: "เตือน / Warning",
-        colorClass: "bg-amber-500/20 text-amber-300 border-amber-500/30",
-        indicatorColor: "bg-amber-400",
-        status: "warning",
-      };
-    }
-
-    return {
-      text: "อันตราย / Danger",
-      colorClass: "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse",
-      indicatorColor: "bg-rose-400",
-      status: "danger",
-    };
-  };
-
-  // Save API Key
   const handleSaveApiKey = () => {
     if (geminiApiKey.trim()) {
       localStorage.setItem("gemini_api_key", geminiApiKey.trim());
@@ -487,7 +268,6 @@ export default function AquariumDashboard() {
     }
   };
 
-  // Ask AI
   const handleAskAi = async (overrideSpecies = null) => {
     const target = overrideSpecies || fishInput.trim();
     if (!target) {
@@ -502,33 +282,20 @@ export default function AquariumDashboard() {
     setIsAiLoading(true);
     setAiResponse(null);
 
-    try {
-      const res = await fetch("/api/gemini", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fishSpecies: target,
-          apiKey: geminiApiKey,
-        }),
-      });
+    const result = await thresholdServiceRef.current.queryAi(target, geminiApiKey);
 
-      const data = await res.json();
-      if (data.success && data.data) {
-        setAiResponse(data);
-      } else {
-        alert(data.error || "ไม่สามารถวิเคราะห์ข้อมูลสายพันธุ์ปลาได้");
-      }
-    } catch (err) {
-      console.error("AI Request error:", err);
-      alert("เกิดข้อผิดพลาดในการเชื่อมต่อกับ AI ผู้ช่วย");
-    } finally {
-      setIsAiLoading(false);
+    if (result.success && result.data) {
+      setAiResponse({ data: result.data, source: result.source });
+    } else {
+      alert(result.error || "ไม่สามารถวิเคราะห์ข้อมูลสายพันธุ์ปลาได้");
     }
+
+    setIsAiLoading(false);
   };
 
-  // Apply AI recommended parameters as current dashboard thresholds
   const handleApplyAiThresholds = async () => {
     if (!aiResponse?.data) return;
+
     const d = aiResponse.data;
     const newSettings = {
       speciesName: d.speciesName,
@@ -542,144 +309,16 @@ export default function AquariumDashboard() {
     };
 
     setAiThresholds(newSettings);
+    const saved = await thresholdServiceRef.current.saveThresholds(newSettings);
 
-    // 1. Persist to localStorage immediately
-    try {
-      localStorage.setItem("tank_thresholds", JSON.stringify(newSettings));
-    } catch (e) {
-      console.warn("Could not save tank_thresholds to localStorage:", e);
-    }
-
-    // 2. Persist to MongoDB
-    try {
-      const res = await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newSettings),
-      });
-      const data = await res.json();
-      if (data.success) {
-        alert(`นำเกณฑ์ของ "${d.speciesName}" ไปปรับใช้ และบันทึกลงฐานข้อมูลเรียบร้อยแล้ว! (รีโหลดแล้วไม่หาย)`);
-      } else {
-        alert(`นำเกณฑ์ของ "${d.speciesName}" ไปปรับใช้เรียบร้อยแล้ว! (บันทึกไว้ในเครื่องแล้ว)`);
-      }
-    } catch (e) {
+    if (saved.success) {
+      alert(`นำเกณฑ์ของ "${d.speciesName}" ไปปรับใช้ และบันทึกลงฐานข้อมูลเรียบร้อยแล้ว!`);
+    } else {
       alert(`นำเกณฑ์ของ "${d.speciesName}" ไปปรับใช้เรียบร้อยแล้ว! (บันทึกไว้ในเครื่องแล้ว)`);
     }
   };
 
-  // Generate comparison report between live tank values and AI recommendations
-  const generateComparisonAnalysis = () => {
-    const activeParams = aiResponse?.data || aiThresholds;
-    const ph = currentValues.ph;
-    const ppm = currentValues.ppm;
-    const temp = currentValues.temp;
-
-    const analysis = [];
-    let score = 100;
-
-    // pH analysis
-    if (ph < activeParams.phMin) {
-      score -= 25;
-      analysis.push({
-        param: "pH (ความเป็นกรด-ด่าง)",
-        current: `${ph} pH`,
-        recommended: `${activeParams.phMin} - ${activeParams.phMax}`,
-        state: "low",
-        msg: `น้ำเป็นกรดมากเกินไป (ต่ำกว่าเกณฑ์ ${activeParams.phMin})`,
-        action: "แนะนำให้เติมบัฟเฟอร์ปรับด่าง (pH Up) เล็กน้อย หรือเปลี่ยนถ่ายน้ำ 20% ด้วยน้ำสะอาดที่พักไว้",
-      });
-    } else if (ph > activeParams.phMax) {
-      score -= 25;
-      analysis.push({
-        param: "pH (ความเป็นกรด-ด่าง)",
-        current: `${ph} pH`,
-        recommended: `${activeParams.phMin} - ${activeParams.phMax}`,
-        state: "high",
-        msg: `น้ำเป็นด่างสูงเกินไป (เกินเกณฑ์ ${activeParams.phMax})`,
-        action: "แนะนำให้เติมน้ำยาปรับลด pH (pH Down), ใส่ใบหูกวางแห้ง หรือขอนไม้ เพื่อเพิ่มแทนนินธรรมชาติ",
-      });
-    } else {
-      analysis.push({
-        param: "pH (ความเป็นกรด-ด่าง)",
-        current: `${ph} pH`,
-        recommended: `${activeParams.phMin} - ${activeParams.phMax}`,
-        state: "good",
-        msg: "ระดับกรด-ด่างอยู่ในช่วงสมบูรณ์แบบสำหรับสายพันธุ์นี้",
-        action: "รักษาคุณภาพน้ำให้สม่ำเสมอ",
-      });
-    }
-
-    // TDS analysis
-    if (ppm < activeParams.ppmMin) {
-      score -= 15;
-      analysis.push({
-        param: "TDS / PPM (ความบริสุทธิ์น้ำ)",
-        current: `${Math.round(ppm)} PPM`,
-        recommended: `${activeParams.ppmMin} - ${activeParams.ppmMax} PPM`,
-        state: "low",
-        msg: `ปริมาณแร่ธาตุละลายต่ำกว่าปกติ (ต่ำกว่า ${activeParams.ppmMin} PPM)`,
-        action: "สำหรับปลาบางชนิดอาจต้องการแร่ธาตุรวม (GH Booster) หรือเกลือแร่สำหรับสัตว์น้ำ",
-      });
-    } else if (ppm > activeParams.ppmMax) {
-      score -= 30;
-      analysis.push({
-        param: "TDS / PPM (ความบริสุทธิ์น้ำ)",
-        current: `${Math.round(ppm)} PPM`,
-        recommended: `${activeParams.ppmMin} - ${activeParams.ppmMax} PPM`,
-        state: "high",
-        msg: `ค่าสารละลายรวมและของเสียสะสมสูงมาก (เกินเกณฑ์ ${activeParams.ppmMax} PPM)`,
-        action: "แนะนำให้เปลี่ยนถ่ายน้ำ 30-40% ทันที และล้างไส้กรองชีวภาพ พร้อมงดให้อาหารตกค้าง",
-      });
-    } else {
-      analysis.push({
-        param: "TDS / PPM (ความบริสุทธิ์น้ำ)",
-        current: `${Math.round(ppm)} PPM`,
-        recommended: `${activeParams.ppmMin} - ${activeParams.ppmMax} PPM`,
-        state: "good",
-        msg: "ระดับความบริสุทธิ์ของน้ำสะอาดและปลอดภัยมาก",
-        action: "ตรวจเช็คเป็นประจำทุกสัปดาห์",
-      });
-    }
-
-    // Temp analysis
-    if (temp < activeParams.tempMin) {
-      score -= 20;
-      analysis.push({
-        param: "อุณหภูมิน้ำ (°C)",
-        current: `${temp} °C`,
-        recommended: `${activeParams.tempMin} - ${activeParams.tempMax} °C`,
-        state: "low",
-        msg: `อุณหภูมิน้ำเย็นเกินไป (ต่ำกว่า ${activeParams.tempMin} °C)`,
-        action: "ควรติดตั้งฮีตเตอร์ควบคุมอุณหภูมิตู้ปลาอัตโนมัติ เพื่อป้องกันปลาป่วยเป็นโรคจุดขาว",
-      });
-    } else if (temp > activeParams.tempMax) {
-      score -= 20;
-      analysis.push({
-        param: "อุณหภูมิน้ำ (°C)",
-        current: `${temp} °C`,
-        recommended: `${activeParams.tempMin} - ${activeParams.tempMax} °C`,
-        state: "high",
-        msg: `อุณหภูมิน้ำร้อนเกินไป (สูงกว่า ${activeParams.tempMax} °C)`,
-        action: "ติดตั้งพัดลมระบายความร้อน หรือเครื่องชิลเลอร์ (Chiller) และเปิดฝาตู้เพื่อระบายความร้อน",
-      });
-    } else {
-      analysis.push({
-        param: "อุณหภูมิน้ำ (°C)",
-        current: `${temp} °C`,
-        recommended: `${activeParams.tempMin} - ${activeParams.tempMax} °C`,
-        state: "good",
-        msg: "อุณหภูมิน้ำเหมาะสม สบายตัวสำหรับปลา",
-        action: "ควบคุมไม่ให้อุณหภูมิแกว่งเกิน ±1 °C ต่อวัน",
-      });
-    }
-
-    return {
-      species: activeParams.speciesName || "ทั่วไป",
-      score: Math.max(0, score),
-      items: analysis,
-    };
-  };
+  const generateComparisonAnalysis = () => thresholdServiceRef.current.generateComparison(currentValues, aiResponse);
 
   const phStatus = evaluateStatus(currentValues.ph, aiThresholds.phMin, aiThresholds.phMax, "ph");
   const ppmStatus = evaluateStatus(currentValues.ppm, aiThresholds.ppmMin, aiThresholds.ppmMax, "ppm");
@@ -687,7 +326,6 @@ export default function AquariumDashboard() {
 
   return (
     <div className="font-sans antialiased text-slate-100 relative pb-16 min-h-screen">
-      {/* Background Animated Floating Bubbles */}
       <div className="bubbles">
         {bubbles.map((b) => (
           <div
@@ -705,7 +343,6 @@ export default function AquariumDashboard() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
         <header className="py-6 border-b border-cyan-900/40 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-600 to-blue-400 flex items-center justify-center shadow-lg shadow-cyan-500/30">
@@ -726,48 +363,35 @@ export default function AquariumDashboard() {
             </div>
           </div>
 
-          {/* Header Controls & Status Badges */}
           <div className="flex flex-wrap items-center justify-center gap-2.5">
-            {/* Blynk Sensor Connection & ESP32 Status */}
-              <div className="flex items-center gap-2">
-                {/* ESP32 Hardware Status Badge */}
-                <div
-                  className={`glass-card px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs sm:text-sm border transition ${
-                    isEspOnline
-                      ? "border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/10"
-                      : "border-rose-500/50 text-rose-300 bg-rose-500/10 animate-pulse"
-                  }`}
-                  title="สถานะการเชื่อมต่อจริงของบอร์ด ESP32 บน Blynk Cloud (isHardwareConnected)"
-                >
-                  <span className="relative flex h-2.5 w-2.5">
-                    {isEspOnline && (
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    )}
-                    <span
-                      className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                        isEspOnline ? "bg-emerald-500" : "bg-rose-500"
-                      }`}
-                    ></span>
-                  </span>
-                  <i className="fa-solid fa-microchip text-xs"></i>
-                  <span className="font-semibold">
-                    ESP32: {isEspOnline ? "Online" : "Offline"}
-                  </span>
-                </div>
-
-                {/* Blynk Cloud Connection Badge */}
-                <div
-                  className={`glass-card px-3 py-1.5 rounded-full hidden sm:flex items-center gap-1.5 text-xs border ${
-                    blynkConnected ? "border-cyan-500/30 text-cyan-300" : "border-rose-500/30 text-rose-300"
-                  }`}
-                  title="สถานะการเชื่อมต่อกับ Blynk Cloud Server"
-                >
-                  <i className="fa-solid fa-cloud text-xs"></i>
-                  <span>{blynkConnected ? "Cloud Sync" : "Cloud Fail"}</span>
-                </div>
+            <div className="flex items-center gap-2">
+              <div
+                className={`glass-card px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs sm:text-sm border transition ${
+                  isEspOnline
+                    ? "border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/10"
+                    : "border-rose-500/50 text-rose-300 bg-rose-500/10 animate-pulse"
+                }`}
+                title="สถานะการเชื่อมต่อจริงของบอร์ด ESP32 บน Blynk Cloud (isHardwareConnected)"
+              >
+                <span className="relative flex h-2.5 w-2.5">
+                  {isEspOnline && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isEspOnline ? "bg-emerald-500" : "bg-rose-500"}`}></span>
+                </span>
+                <i className="fa-solid fa-microchip text-xs"></i>
+                <span className="font-semibold">ESP32: {isEspOnline ? "Online" : "Offline"}</span>
               </div>
 
-            {/* Manual Refresh Button */}
+              <div
+                className={`glass-card px-3 py-1.5 rounded-full hidden sm:flex items-center gap-1.5 text-xs border ${
+                  blynkConnected ? "border-cyan-500/30 text-cyan-300" : "border-rose-500/30 text-rose-300"
+                }`}
+                title="สถานะการเชื่อมต่อกับ Blynk Cloud Server"
+              >
+                <i className="fa-solid fa-cloud text-xs"></i>
+                <span>{blynkConnected ? "Cloud Sync" : "Cloud Fail"}</span>
+              </div>
+            </div>
+
             <button
               onClick={() => fetchBlynkData()}
               disabled={isRefreshing}
@@ -778,7 +402,6 @@ export default function AquariumDashboard() {
               <span>รีเฟรช</span>
             </button>
 
-            {/* Diagnostic Details Toggle */}
             <button
               onClick={() => setShowDiagnostics(!showDiagnostics)}
               className="glass-card hover:bg-slate-700/40 px-2.5 py-1.5 rounded-full text-xs border border-slate-700 text-slate-400 hover:text-cyan-300 transition"
@@ -789,17 +412,13 @@ export default function AquariumDashboard() {
           </div>
         </header>
 
-        {/* Diagnostics Bar (Collapsible) */}
         {showDiagnostics && (
           <div className="glass-card rounded-xl p-4 mb-6 border border-cyan-500/20 text-xs font-mono space-y-2">
             <div className="flex justify-between items-center text-cyan-300 font-bold font-sans">
               <span className="flex items-center gap-1.5">
                 <i className="fa-solid fa-satellite-dish"></i> สถานะฮาร์ดแวร์ ESP32 และ Blynk Cloud Pins
               </span>
-              <button
-                onClick={() => setShowDiagnostics(false)}
-                className="text-slate-400 hover:text-white"
-              >
+              <button onClick={() => setShowDiagnostics(false)} className="text-slate-400 hover:text-white">
                 <i className="fa-solid fa-xmark"></i>
               </button>
             </div>
@@ -809,13 +428,7 @@ export default function AquariumDashboard() {
                   <span className="text-emerald-400 font-semibold flex items-center gap-1">
                     <i className="fa-solid fa-microchip"></i> ESP32 Board
                   </span>
-                  <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
-                      isEspOnline
-                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                        : "bg-rose-500/20 text-rose-300 border border-rose-500/40"
-                    }`}
-                  >
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${isEspOnline ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40" : "bg-rose-500/20 text-rose-300 border border-rose-500/40"}`}>
                     {isEspOnline ? "ONLINE" : "OFFLINE"}
                   </span>
                 </div>
@@ -841,7 +454,6 @@ export default function AquariumDashboard() {
           </div>
         )}
 
-        {/* Alert Banner if ESP32 is offline */}
         {!isEspOnline && (
           <div className="mb-6 p-4 rounded-2xl glass-card border border-rose-500/50 bg-rose-950/40 flex items-start gap-3.5 text-rose-200 shadow-xl shadow-rose-950/50 animate-pulse">
             <div className="p-2.5 bg-rose-500/20 text-rose-300 rounded-xl mt-0.5 shrink-0 border border-rose-500/30">
@@ -852,14 +464,12 @@ export default function AquariumDashboard() {
                 แจ้งเตือน: อุปกรณ์ ESP32 ขาดการเชื่อมต่อ (ESP32 Offline)
               </strong>
               <p className="text-xs sm:text-sm text-rose-200/90 leading-relaxed">
-                บอร์ด ESP32 ไม่ได้เชื่อมต่อกับระบบ Blynk Cloud ในขณะนี้ (isHardwareConnected = false) ค่าวัดอุณหภูมิ (V0), TDS (V1), และ pH (V2) ที่แสดงอาจเป็นค่าล่าสุดที่ค้างอยู่ กรุณาตรวจเช็คการจ่ายไฟ การเชื่อมต่อ Wi-Fi หรือเฟิร์มแวร์บนตัวบอร์ด ESP32
+                บอร์ด ESP32 ไม่ได้เชื่อมต่อกับระบบ Blynk Cloud ในขณะนี้ (isHardwareConnected = false) ค่าวัดอุณหภูมิและค่าพารามิเตอร์จะอาจใช้ค่าเดิมหรือรอการอัปเดตใหม่
               </p>
             </div>
           </div>
         )}
 
-
-        {/* Section 1: Current Sensor Parameters (pH, PPM, Temp) */}
         <section className="mb-10">
           <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 mb-4">
             <div className="flex items-center gap-2">
@@ -881,11 +491,8 @@ export default function AquariumDashboard() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* pH Card (V2) */}
             <div className="glass-card glass-card-hover rounded-2xl p-6 relative overflow-hidden">
-              <div className="absolute -right-6 -bottom-6 text-cyan-500/10 text-9xl font-black select-none pointer-events-none">
-                pH
-              </div>
+              <div className="absolute -right-6 -bottom-6 text-cyan-500/10 text-9xl font-black select-none pointer-events-none">pH</div>
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-3">
                   <div className="p-3 bg-cyan-500/20 text-cyan-300 rounded-xl shadow-inner">
@@ -894,37 +501,23 @@ export default function AquariumDashboard() {
                   <div>
                     <div className="flex items-center gap-1.5">
                       <h3 className="font-medium text-slate-300">ระดับความเป็นกรด-ด่าง</h3>
-                      <span className="text-[10px] bg-cyan-900/60 text-cyan-300 px-1.5 py-0.2 rounded font-mono">
-                        V2
-                      </span>
+                      <span className="text-[10px] bg-cyan-900/60 text-cyan-300 px-1.5 py-0.2 rounded font-mono">V2</span>
                     </div>
-                    <p className="text-xs text-slate-400">
-                      ค่าที่เหมาะสม: {aiThresholds.phMin} - {aiThresholds.phMax} pH
-                    </p>
+                    <p className="text-xs text-slate-400">ค่าที่เหมาะสม: {aiThresholds.phMin} - {aiThresholds.phMax} pH</p>
                   </div>
                 </div>
-                <span
-                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${phStatus.colorClass}`}
-                >
+                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${phStatus.colorClass}`}>
                   {phStatus.text}
                 </span>
               </div>
 
               <div className="flex items-baseline gap-2 mb-4">
-                <span className="text-5xl font-extrabold text-white tracking-tight">
-                  {Number(currentValues.ph).toFixed(1)}
-                </span>
+                <span className="text-5xl font-extrabold text-white tracking-tight">{Number(currentValues.ph).toFixed(1)}</span>
                 <span className="text-sm text-slate-400 font-medium">pH</span>
               </div>
 
-              {/* Progress Bar (0 to 14) */}
               <div className="w-full bg-slate-800/80 rounded-full h-2.5 overflow-hidden">
-                <div
-                  className="bg-gradient-to-r from-emerald-400 to-cyan-400 h-2.5 rounded-full transition-all duration-500"
-                  style={{
-                    width: `${Math.min(100, Math.max(0, (currentValues.ph / 14) * 100))}%`,
-                  }}
-                ></div>
+                <div className="bg-gradient-to-r from-emerald-400 to-cyan-400 h-2.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, Math.max(0, (currentValues.ph / 14) * 100))}%` }}></div>
               </div>
               <div className="flex justify-between text-[10px] text-slate-400 mt-1.5">
                 <span>0 (กรดเข้มข้น)</span>
@@ -933,11 +526,8 @@ export default function AquariumDashboard() {
               </div>
             </div>
 
-            {/* PPM / TDS Card (V1) */}
             <div className="glass-card glass-card-hover rounded-2xl p-6 relative overflow-hidden">
-              <div className="absolute -right-6 -bottom-6 text-blue-500/10 text-8xl font-black select-none pointer-events-none">
-                PPM
-              </div>
+              <div className="absolute -right-6 -bottom-6 text-blue-500/10 text-8xl font-black select-none pointer-events-none">PPM</div>
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-3">
                   <div className="p-3 bg-blue-500/20 text-blue-300 rounded-xl shadow-inner">
@@ -946,37 +536,23 @@ export default function AquariumDashboard() {
                   <div>
                     <div className="flex items-center gap-1.5">
                       <h3 className="font-medium text-slate-300">ความบริสุทธิ์น้ำ (TDS)</h3>
-                      <span className="text-[10px] bg-blue-900/60 text-blue-300 px-1.5 py-0.2 rounded font-mono">
-                        V1
-                      </span>
+                      <span className="text-[10px] bg-blue-900/60 text-blue-300 px-1.5 py-0.2 rounded font-mono">V1</span>
                     </div>
-                    <p className="text-xs text-slate-400">
-                      ค่าที่เหมาะสม: {aiThresholds.ppmMin} - {aiThresholds.ppmMax} PPM 
-                    </p>
+                    <p className="text-xs text-slate-400">ค่าที่เหมาะสม: {aiThresholds.ppmMin} - {aiThresholds.ppmMax} PPM</p>
                   </div>
                 </div>
-                <span
-                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${ppmStatus.colorClass}`}
-                >
-                  {ppmStatus.text} 
+                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${ppmStatus.colorClass}`}>
+                  {ppmStatus.text}
                 </span>
               </div>
 
               <div className="flex items-baseline gap-2 mb-4">
-                <span className="text-5xl font-extrabold text-white tracking-tight">
-                  {Math.round(currentValues.ppm)} 
-                </span>
+                <span className="text-5xl font-extrabold text-white tracking-tight">{Math.round(currentValues.ppm)}</span>
                 <span className="text-sm text-slate-400 font-medium">PPM</span>
               </div>
 
-              {/* Progress Bar (0 to 1500 PPM) */}
               <div className="w-full bg-slate-800/80 rounded-full h-2.5 overflow-hidden">
-                <div
-                  className="bg-gradient-to-r from-blue-400 to-indigo-400 h-2.5 rounded-full transition-all duration-500"
-                  style={{
-                    width: `${Math.min(100, Math.max(0, (currentValues.ppm / 1500) * 100))}%`,
-                  }}
-                ></div>
+                <div className="bg-gradient-to-r from-blue-400 to-indigo-400 h-2.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, Math.max(0, (currentValues.ppm / 1500) * 100))}%` }}></div>
               </div>
               <div className="flex justify-between text-[10px] text-slate-400 mt-1.5">
                 <span>0 PPM</span>
@@ -985,11 +561,8 @@ export default function AquariumDashboard() {
               </div>
             </div>
 
-            {/* Temp Card (V0) */}
             <div className="glass-card glass-card-hover rounded-2xl p-6 relative overflow-hidden">
-              <div className="absolute -right-6 -bottom-6 text-amber-500/10 text-9xl font-black select-none pointer-events-none">
-                °C
-              </div>
+              <div className="absolute -right-6 -bottom-6 text-amber-500/10 text-9xl font-black select-none pointer-events-none">°C</div>
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-3">
                   <div className="p-3 bg-amber-500/20 text-amber-300 rounded-xl shadow-inner">
@@ -998,40 +571,23 @@ export default function AquariumDashboard() {
                   <div>
                     <div className="flex items-center gap-1.5">
                       <h3 className="font-medium text-slate-300">อุณหภูมิน้ำ</h3>
-                      <span className="text-[10px] bg-amber-900/60 text-amber-300 px-1.5 py-0.2 rounded font-mono">
-                        V0
-                      </span>
+                      <span className="text-[10px] bg-amber-900/60 text-amber-300 px-1.5 py-0.2 rounded font-mono">V0</span>
                     </div>
-                    <p className="text-xs text-slate-400">
-                      ค่าที่เหมาะสม: {aiThresholds.tempMin} - {aiThresholds.tempMax} °C
-                    </p>
+                    <p className="text-xs text-slate-400">ค่าที่เหมาะสม: {aiThresholds.tempMin} - {aiThresholds.tempMax} °C</p>
                   </div>
                 </div>
-                <span
-                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${tempStatus.colorClass}`}
-                >
+                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${tempStatus.colorClass}`}>
                   {tempStatus.text}
                 </span>
               </div>
 
               <div className="flex items-baseline gap-2 mb-4">
-                <span className="text-5xl font-extrabold text-white tracking-tight">
-                  {Number(currentValues.temp).toFixed(1)}
-                </span>
+                <span className="text-5xl font-extrabold text-white tracking-tight">{Number(currentValues.temp).toFixed(1)}</span>
                 <span className="text-sm text-slate-400 font-medium">°C</span>
               </div>
 
-              {/* Progress Bar (10 to 40 °C) */}
               <div className="w-full bg-slate-800/80 rounded-full h-2.5 overflow-hidden">
-                <div
-                  className="bg-gradient-to-r from-amber-400 to-orange-400 h-2.5 rounded-full transition-all duration-500"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      Math.max(0, ((currentValues.temp - 10) / 30) * 100)
-                    )}%`,
-                  }}
-                ></div>
+                <div className="bg-gradient-to-r from-amber-400 to-orange-400 h-2.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, Math.max(0, ((currentValues.temp - 10) / 30) * 100))}%` }}></div>
               </div>
               <div className="flex justify-between text-[10px] text-slate-400 mt-1.5">
                 <span>10 °C</span>
@@ -1042,7 +598,6 @@ export default function AquariumDashboard() {
           </div>
         </section>
 
-        {/* Section 2: Real-time & Historical Trends Chart */}
         <div className="glass-card rounded-2xl p-6 mb-10">
           <div className="flex flex-col lg:flex-row justify-between lg:items-center gap-4 mb-5">
             <div>
@@ -1052,7 +607,7 @@ export default function AquariumDashboard() {
                   แนวโน้มค่าวัดคุณภาพน้ำ
                 </h3>
                 {selectedTimeRange === "minute" ? (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm shadow-emerald-500/10">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
                     สด (Real-time)
                   </span>
@@ -1065,16 +620,14 @@ export default function AquariumDashboard() {
               </div>
               <p className="text-xs text-slate-400 mt-1">
                 {selectedTimeRange === "minute" && "แสดงผลสดแบบเรียลไทม์ อัปเดตอัตโนมัติตามสัญญาณ Blynk ทุก 3 วินาที"}
-                {selectedTimeRange === "hour" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายชั่วโมง (ชั่วโมงที่บันทึกข้อมูล)"}
+                {selectedTimeRange === "hour" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายชั่วโมง (ชั่วโมงที่บันทึก)"}
                 {selectedTimeRange === "day" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายวัน (วันละ 1 จุดสรุป)"}
                 {selectedTimeRange === "week" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายสัปดาห์ (อาทิตย์)"}
                 {selectedTimeRange === "month" && "แสดงผลค่าเฉลี่ยย้อนหลังแบบรายเดือน"}
               </p>
             </div>
 
-            {/* Timeframe Selector & Legend Controls */}
             <div className="flex flex-wrap items-center gap-3">
-              {/* Range Selector Buttons (นาที, ชม., วัน, อาทิตย์, เดือน) */}
               <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-700/80 shadow-inner">
                 {TIME_RANGES.map((r) => {
                   const isActive = selectedTimeRange === r.id;
@@ -1097,39 +650,23 @@ export default function AquariumDashboard() {
                 })}
               </div>
 
-              {/* Refresh Chart Button */}
               <button
                 onClick={() => fetchChartData(selectedTimeRange)}
                 disabled={isChartLoading}
                 className="glass-card hover:bg-cyan-500/20 px-2.5 py-1.5 rounded-xl text-xs flex items-center gap-1 text-slate-400 hover:text-cyan-300 border border-slate-700/70 transition disabled:opacity-50"
                 title="รีเฟรชข้อมูลกราฟ"
               >
-                <i
-                  className={`fa-solid fa-arrows-rotate text-xs ${
-                    isChartLoading ? "animate-spin text-cyan-400" : ""
-                  }`}
-                ></i>
+                <i className={`fa-solid fa-arrows-rotate text-xs ${isChartLoading ? "animate-spin text-cyan-400" : ""}`}></i>
               </button>
 
-              {/* Metric Legends */}
               <div className="flex items-center gap-3 pl-1 border-l border-slate-800 hidden sm:flex">
-                <span className="inline-flex items-center text-xs text-cyan-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#00b4d8] inline-block mr-1.5"></span>{" "}
-                  pH
-                </span>
-                <span className="inline-flex items-center text-xs text-blue-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#3b82f6] inline-block mr-1.5"></span>{" "}
-                  PPM
-                </span>
-                <span className="inline-flex items-center text-xs text-amber-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#f59e0b] inline-block mr-1.5"></span>{" "}
-                  °C
-                </span>
+                <span className="inline-flex items-center text-xs text-cyan-300"><span className="w-2.5 h-2.5 rounded-full bg-[#00b4d8] inline-block mr-1.5"></span> pH</span>
+                <span className="inline-flex items-center text-xs text-blue-300"><span className="w-2.5 h-2.5 rounded-full bg-[#3b82f6] inline-block mr-1.5"></span> PPM</span>
+                <span className="inline-flex items-center text-xs text-amber-300"><span className="w-2.5 h-2.5 rounded-full bg-[#f59e0b] inline-block mr-1.5"></span> °C</span>
               </div>
             </div>
           </div>
 
-          {/* Chart Canvas Area */}
           <div className="h-64 sm:h-72 w-full relative">
             {isChartLoading && (
               <div className="absolute inset-0 z-10 bg-slate-950/60 backdrop-blur-[2px] rounded-xl flex items-center justify-center gap-2 text-cyan-300 text-xs">
@@ -1140,7 +677,6 @@ export default function AquariumDashboard() {
             <canvas ref={chartCanvasRef}></canvas>
           </div>
 
-          {/* Summary Stats Footer */}
           {chartSummary && (
             <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
               <div className="flex items-center gap-2">
@@ -1150,21 +686,14 @@ export default function AquariumDashboard() {
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-4">
-                <span className="text-slate-300">
-                  pH เฉลี่ย: <strong className="text-cyan-300 font-bold">{chartSummary.avgPh}</strong>
-                </span>
-                <span className="text-slate-300">
-                  TDS เฉลี่ย: <strong className="text-blue-300 font-bold">{chartSummary.avgPpm}</strong> PPM
-                </span>
-                <span className="text-slate-300">
-                  อุณหภูมิเฉลี่ย: <strong className="text-amber-300 font-bold">{chartSummary.avgTemp}</strong> °C
-                </span>
+                <span className="text-slate-300">pH เฉลี่ย: <strong className="text-cyan-300 font-bold">{chartSummary.avgPh}</strong></span>
+                <span className="text-slate-300">TDS เฉลี่ย: <strong className="text-blue-300 font-bold">{chartSummary.avgPpm}</strong> PPM</span>
+                <span className="text-slate-300">อุณหภูมิเฉลี่ย: <strong className="text-amber-300 font-bold">{chartSummary.avgTemp}</strong> °C</span>
               </div>
             </div>
           )}
         </div>
 
-        {/* Section 3: AI Assistant Powered by Gemini */}
         <section className="glass-card rounded-2xl p-6 lg:p-8 relative overflow-hidden border border-cyan-500/30">
           <div className="absolute -top-24 -right-24 w-72 h-72 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
@@ -1177,11 +706,10 @@ export default function AquariumDashboard() {
                 ผู้ช่วย AI วิเคราะห์สภาวะปลาสายพันธุ์ต่างๆ
               </h2>
               <p className="text-sm text-slate-300 mt-1">
-                กรอกชื่อชนิดปลาที่คุณเลี้ยงเพื่อหาค่า pH, PPM และอุณหภูมิที่สมบูรณ์แบบที่สุด พร้อมคำแนะนำพิเศษ
+                กรอกชื่อชนิดปลาที่คุณเลี้ยงเพื่อหาค่า pH, PPM และอุณหภูมิที่สมบูรณ์แบบสำหรับการเลี้ยงในตู้
               </p>
             </div>
 
-            {/* API Key Config Box */}
             <div className="glass-card p-2.5 rounded-xl border border-slate-700 flex items-center gap-2 max-w-sm text-xs relative">
               <i className="fa-solid fa-key text-amber-400 pl-1"></i>
               <input
@@ -1207,7 +735,6 @@ export default function AquariumDashboard() {
             </div>
           </div>
 
-          {/* Quick Fish Presets */}
           <div className="mb-4">
             <span className="text-xs text-slate-400 mr-2">ปลายอดนิยม:</span>
             <div className="inline-flex flex-wrap gap-2 mt-1">
@@ -1233,7 +760,6 @@ export default function AquariumDashboard() {
             </div>
           </div>
 
-          {/* Search Input Box */}
           <div className="flex flex-col sm:flex-row gap-3 mb-6">
             <div className="relative flex-grow">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400">
@@ -1253,7 +779,7 @@ export default function AquariumDashboard() {
             <button
               onClick={() => handleAskAi()}
               disabled={isAiLoading}
-              className="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-medium px-6 py-3.5 rounded-xl transition-all shadow-lg shadow-cyan-500/25 flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
+              className="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-medium px-6 py-3.5 rounded-xl transition-all shadow-lg shadow-cyan-500/25 flex items-center justify-center gap-2"
             >
               {isAiLoading ? (
                 <>
@@ -1269,7 +795,6 @@ export default function AquariumDashboard() {
             </button>
           </div>
 
-          {/* AI Loading State */}
           {isAiLoading && (
             <div className="py-12 text-center">
               <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-cyan-400 border-t-transparent mb-3"></div>
@@ -1279,7 +804,6 @@ export default function AquariumDashboard() {
             </div>
           )}
 
-          {/* AI Response Output */}
           {aiResponse && !isAiLoading && (
             <div className="bg-slate-900/80 rounded-xl p-6 border border-cyan-500/30 transition-all">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-4 mb-4 border-b border-slate-800 gap-3">
@@ -1289,16 +813,12 @@ export default function AquariumDashboard() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-xl font-bold text-cyan-200">
-                        {aiResponse.data.speciesName}
-                      </h3>
+                      <h3 className="text-xl font-bold text-cyan-200">{aiResponse.data.speciesName}</h3>
                       <span className="text-[10px] bg-cyan-500/10 text-cyan-400 px-2 py-0.5 rounded border border-cyan-500/20">
                         {aiResponse.source === "gemini" ? "Gemini AI Live" : "Expert Database"}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-400">
-                      ค่าพารามิเตอร์ที่แนะนำและเหมาะสมที่สุดสำหรับสายพันธุ์นี้
-                    </p>
+                    <p className="text-xs text-slate-400">ค่าพารามิเตอร์ที่แนะนำและเหมาะสมที่สุดสำหรับสายพันธุ์นี้</p>
                   </div>
                 </div>
 
@@ -1319,7 +839,6 @@ export default function AquariumDashboard() {
                 </div>
               </div>
 
-              {/* Recommended Parameters Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div className="bg-slate-800/60 p-4 rounded-xl border border-slate-700/60 flex items-center gap-4">
                   <div className="p-3 bg-cyan-500/10 text-cyan-400 rounded-xl">
@@ -1327,9 +846,7 @@ export default function AquariumDashboard() {
                   </div>
                   <div>
                     <div className="text-xs text-slate-400">ค่า pH ที่แนะนำ</div>
-                    <div className="text-lg font-bold text-cyan-300">
-                      {aiResponse.data.phMin} - {aiResponse.data.phMax}
-                    </div>
+                    <div className="text-lg font-bold text-cyan-300">{aiResponse.data.phMin} - {aiResponse.data.phMax}</div>
                   </div>
                 </div>
 
@@ -1339,9 +856,7 @@ export default function AquariumDashboard() {
                   </div>
                   <div>
                     <div className="text-xs text-slate-400">ค่า PPM (TDS) ที่แนะนำ</div>
-                    <div className="text-lg font-bold text-blue-300">
-                      {aiResponse.data.ppmMin} - {aiResponse.data.ppmMax} PPM
-                    </div>
+                    <div className="text-lg font-bold text-blue-300">{aiResponse.data.ppmMin} - {aiResponse.data.ppmMax} PPM</div>
                   </div>
                 </div>
 
@@ -1351,14 +866,11 @@ export default function AquariumDashboard() {
                   </div>
                   <div>
                     <div className="text-xs text-slate-400">อุณหภูมิที่แนะนำ</div>
-                    <div className="text-lg font-bold text-amber-300">
-                      {aiResponse.data.tempMin} - {aiResponse.data.tempMax} °C
-                    </div>
+                    <div className="text-lg font-bold text-amber-300">{aiResponse.data.tempMin} - {aiResponse.data.tempMax} °C</div>
                   </div>
                 </div>
               </div>
 
-              {/* Additional Tips Section */}
               <div className="bg-slate-800/40 rounded-xl p-4 border border-slate-700/40">
                 <h4 className="text-sm font-semibold text-slate-200 mb-2.5 flex items-center gap-2">
                   <i className="fa-solid fa-lightbulb text-amber-400"></i> คำแนะนำและข้อควรระวังพิเศษ
@@ -1374,23 +886,16 @@ export default function AquariumDashboard() {
               </div>
 
               {aiResponse.note && (
-                <div className="mt-3 text-[11px] text-slate-400 italic">
-                  * {aiResponse.note}
-                </div>
+                <div className="mt-3 text-[11px] text-slate-400 italic">* {aiResponse.note}</div>
               )}
             </div>
           )}
         </section>
 
-        {/* Modal: Deep Comparison of Current Tank vs AI Recommended */}
         {compareModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
             <div className="glass-card max-w-2xl w-full rounded-2xl p-6 sm:p-7 border border-cyan-500/40 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-              {/* Close Button */}
-              <button
-                onClick={() => setCompareModalOpen(false)}
-                className="absolute top-5 right-5 text-slate-400 hover:text-white transition w-8 h-8 rounded-full bg-slate-800/60 flex items-center justify-center"
-              >
+              <button onClick={() => setCompareModalOpen(false)} className="absolute top-5 right-5 text-slate-400 hover:text-white transition w-8 h-8 rounded-full bg-slate-800/60 flex items-center justify-center">
                 <i className="fa-solid fa-xmark text-lg"></i>
               </button>
 
@@ -1403,67 +908,30 @@ export default function AquariumDashboard() {
                         <i className="fa-solid fa-code-compare"></i>
                       </div>
                       <div>
-                        <h3 className="text-xl font-bold text-white">
-                          ผลการเปรียบเทียบสภาวะน้ำปัจจุบัน
-                        </h3>
-                        <p className="text-xs text-cyan-300/80">
-                          เทียบกับเกณฑ์ที่เหมาะสมของ: {comp.species}
-                        </p>
+                        <h3 className="text-xl font-bold text-white">ผลการเปรียบเทียบสภาวะน้ำปัจจุบัน</h3>
+                        <p className="text-xs text-cyan-300/80">เทียบกับเกณฑ์ที่เหมาะสมของ: {comp.species}</p>
                       </div>
                     </div>
 
-                    {/* Overall Quality Score */}
                     <div className="bg-slate-900/90 rounded-xl p-4 mb-5 border border-cyan-500/30 flex items-center justify-between">
                       <div>
                         <div className="text-xs text-slate-400">ดัชนีความเหมาะสมของน้ำโดยรวม</div>
-                        <div className="text-2xl font-black text-cyan-300">
-                          {comp.score} / 100 คะแนน
-                        </div>
+                        <div className="text-2xl font-black text-cyan-300">{comp.score} / 100 คะแนน</div>
                       </div>
                       <div className="text-right">
-                        <span
-                          className={`px-3 py-1 rounded-full text-xs font-bold ${
-                            comp.score >= 80
-                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                              : comp.score >= 50
-                              ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                              : "bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse"
-                          }`}
-                        >
-                          {comp.score >= 80
-                            ? "สภาวะน้ำดีเยี่ยม"
-                            : comp.score >= 50
-                            ? "ควรปรับปรุงบางส่วน"
-                            : "ต้องแก้ไขด่วน"}
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${comp.score >= 80 ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40" : comp.score >= 50 ? "bg-amber-500/20 text-amber-300 border border-amber-500/40" : "bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse"}`}>
+                          {comp.score >= 80 ? "สภาวะน้ำดีเยี่ยม" : comp.score >= 50 ? "ควรปรับปรุงบางส่วน" : "ต้องแก้ไขด่วน"}
                         </span>
                       </div>
                     </div>
 
-                    {/* Comparison Cards */}
                     <div className="space-y-3 mb-6">
                       {comp.items.map((item, idx) => (
-                        <div
-                          key={idx}
-                          className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/60"
-                        >
+                        <div key={idx} className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/60">
                           <div className="flex justify-between items-center mb-1.5">
-                            <span className="font-semibold text-sm text-slate-200">
-                              {item.param}
-                            </span>
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded font-medium ${
-                                item.state === "good"
-                                  ? "bg-emerald-500/20 text-emerald-300"
-                                  : item.state === "low"
-                                  ? "bg-amber-500/20 text-amber-300"
-                                  : "bg-rose-500/20 text-rose-300"
-                              }`}
-                            >
-                              {item.state === "good"
-                                ? "สมบูรณ์แบบ 👍"
-                                : item.state === "low"
-                                ? "ต่ำกว่าเกณฑ์ ⚠️"
-                                : "สูงกว่าเกณฑ์ ⚠️"}
+                            <span className="font-semibold text-sm text-slate-200">{item.param}</span>
+                            <span className={`text-xs px-2 py-0.5 rounded font-medium ${item.state === "good" ? "bg-emerald-500/20 text-emerald-300" : item.state === "low" ? "bg-amber-500/20 text-amber-300" : "bg-rose-500/20 text-rose-300"}`}>
+                              {item.state === "good" ? "สมบูรณ์แบบ 👍" : item.state === "low" ? "ต่ำกว่าเกณฑ์ ⚠️" : "สูงกว่าเกณฑ์ ⚠️"}
                             </span>
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-xs text-slate-300 mb-2">
@@ -1494,10 +962,7 @@ export default function AquariumDashboard() {
                       >
                         นำเกณฑ์นี้ไปใช้กับหน้าแดชบอร์ด
                       </button>
-                      <button
-                        onClick={() => setCompareModalOpen(false)}
-                        className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-xs transition"
-                      >
+                      <button onClick={() => setCompareModalOpen(false)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-xs transition">
                         ปิดหน้าต่าง
                       </button>
                     </div>
@@ -1508,12 +973,9 @@ export default function AquariumDashboard() {
           </div>
         )}
 
-        {/* Footer */}
         <footer className="mt-12 text-center text-xs text-slate-500 border-t border-slate-800 pt-6">
           <p>© 2026 AquaSmart Guard - ระบบตรวจวัดตู้ปลาอัจฉริยะแบบเรียลไทม์ (Next.js & Blynk IoT)</p>
-          <p className="mt-1 text-slate-600">
-            Blynk Pins: V0 (Temperature), V1 (TDS/PPM), V2 (pH) | AI Engine: Gemini 3.5 Flash Lite
-          </p>
+          <p className="mt-1 text-slate-600">Blynk Pins: V0 (Temperature), V1 (TDS/PPM), V2 (pH) | AI Engine: Gemini 3.5 Flash Lite</p>
         </footer>
       </div>
     </div>
